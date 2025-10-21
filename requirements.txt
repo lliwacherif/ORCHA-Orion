@@ -9,3 +9,4 @@ python-dotenv==1.0.0
 redis==4.6.0
 prometheus-client==0.16.0
 loguru==0.7.0
+PyPDF2==3.0.1
