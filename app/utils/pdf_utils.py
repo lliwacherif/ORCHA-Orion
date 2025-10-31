@@ -57,3 +57,4 @@ def is_valid_pdf_base64(base64_data: str) -> bool:
     except Exception:
         return False
 
+
