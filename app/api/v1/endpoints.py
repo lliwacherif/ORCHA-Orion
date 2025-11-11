@@ -9,12 +9,13 @@ from app.services.orchestrator import (
     handle_rag_query,
     handle_ingest_request,
     handle_predict_request,
+    handle_web_search_request,
 )
 from app.services.chatbot_client import get_available_models
 from app.utils.token_tracker_pg import PostgreSQLTokenTracker
 from app.services.pulse_service import get_user_pulse, update_user_pulse
 from app.db.database import get_db
-from app.db.models import User, Conversation, ChatMessage
+from app.db.models import User, Conversation, ChatMessage, UserMemory
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from datetime import datetime
@@ -71,6 +72,13 @@ class PredictRequest(BaseModel):
     tenant_id: Optional[str] = None
     features: dict
 
+class WebSearchRequest(BaseModel):
+    user_id: str
+    tenant_id: Optional[str] = None
+    query: str
+    max_results: Optional[int] = 5
+    conversation_id: Optional[int] = None
+
 class RouteRequest(BaseModel):
     user_id: Optional[str] = None
     tenant_id: Optional[str] = None
@@ -118,6 +126,25 @@ class CreateConversationRequest(BaseModel):
 
 class UpdateConversationRequest(BaseModel):
     title: Optional[str] = None
+
+class SaveMemoryRequest(BaseModel):
+    user_id: int
+    content: str
+    title: Optional[str] = None
+    conversation_id: Optional[int] = None
+    source: Optional[str] = "manual"
+    tags: Optional[List[str]] = None
+
+class MemoryResponse(BaseModel):
+    id: int
+    content: str
+    title: Optional[str]
+    conversation_id: Optional[int]
+    source: str
+    tags: Optional[List[str]]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
 
 @router.post("/orcha/route")
 async def orcha_route(req: RouteRequest, request: Request) -> RouteDecision:
@@ -224,6 +251,35 @@ async def orcha_ingest(req: IngestRequest, request: Request):
 @router.post("/orcha/predict")
 async def orcha_predict(req: PredictRequest, request: Request):
     result = await handle_predict_request(req.dict(), request)
+    return result
+
+@router.post("/orcha/search")
+async def orcha_web_search(req: WebSearchRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Perform a web search and get LLM-refined results.
+    
+    Request:
+    {
+        "user_id": "123",
+        "query": "Who won the F1 race last weekend?",
+        "max_results": 5,  // optional, default: 5
+        "conversation_id": 456  // optional, to maintain conversation context
+    }
+    
+    Response:
+    {
+        "status": "ok",
+        "message": "LLM-refined answer based on search results",
+        "conversation_id": 456,
+        "search_query": "Who won the F1 race last weekend?",
+        "raw_search_results": "Here are the search results...",
+        "results_count": 5,
+        "token_usage": {...}
+    }
+    """
+    # Attach database session to request state for orchestrator
+    request.state.db_session = db
+    result = await handle_web_search_request(req.dict(), request)
     return result
 
 @router.get("/models")
@@ -601,6 +657,313 @@ async def regenerate_pulse(user_id: int, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== MEMORY ENDPOINTS =====
+
+@router.post("/memory")
+async def save_memory(req: SaveMemoryRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Create a new memory entry for a user.
+    Supports multiple memories per user for complete history tracking.
+    
+    Request:
+    {
+        "user_id": 123,
+        "content": "User prefers formal communication, works in insurance...",
+        "title": "Communication preferences",  // optional
+        "conversation_id": 456,  // optional - link to source conversation
+        "source": "auto_extraction",  // optional - manual, auto_extraction, import
+        "tags": ["preferences", "communication"]  // optional - categorization
+    }
+    
+    Response:
+    {
+        "status": "ok",
+        "message": "Memory saved successfully",
+        "memory_id": 789
+    }
+    """
+    try:
+        # Verify user exists
+        user_result = await db.execute(select(User).where(User.id == req.user_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Verify conversation exists if provided (skip validation if None)
+        if req.conversation_id is not None:
+            conv_result = await db.execute(
+                select(Conversation).where(Conversation.id == req.conversation_id)
+            )
+            conversation = conv_result.scalar_one_or_none()
+            if not conversation:
+                # Don't fail - just set conversation_id to None
+                # This prevents errors if frontend sends invalid conversation_id
+                req.conversation_id = None
+        
+        # Create new memory entry (always creates new, never updates)
+        memory = UserMemory(
+            user_id=req.user_id,
+            content=req.content,
+            title=req.title,
+            conversation_id=req.conversation_id,
+            source=req.source or "manual",
+            tags=req.tags,
+            is_active=True
+        )
+        db.add(memory)
+        await db.commit()
+        await db.refresh(memory)
+        
+        return {
+            "status": "ok",
+            "message": "Memory saved successfully",
+            "memory_id": memory.id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        # Log the actual error for debugging
+        print(f"[ERROR] Failed to save memory: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to save memory: {str(e)}")
+
+
+@router.get("/memory/{user_id}")
+async def get_memories(
+    user_id: int, 
+    limit: int = 50,
+    offset: int = 0,
+    include_inactive: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieve all memories for a user (paginated).
+    
+    Query Parameters:
+    - limit: Maximum number of memories to return (default: 50)
+    - offset: Number of memories to skip (default: 0)
+    - include_inactive: Include soft-deleted memories (default: false)
+    
+    Response:
+    {
+        "status": "ok",
+        "memories": [
+            {
+                "id": 1,
+                "content": "User prefers...",
+                "title": "Communication preferences",
+                "conversation_id": 123,
+                "source": "auto_extraction",
+                "tags": ["preferences"],
+                "is_active": true,
+                "created_at": "2025-01-01T10:00:00",
+                "updated_at": "2025-01-02T15:30:00"
+            }
+        ],
+        "total": 10,
+        "limit": 50,
+        "offset": 0
+    }
+    """
+    try:
+        # Verify user exists
+        user_result = await db.execute(select(User).where(User.id == user_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Build query
+        query = select(UserMemory).where(UserMemory.user_id == user_id)
+        
+        if not include_inactive:
+            query = query.where(UserMemory.is_active == True)
+        
+        # Get total count
+        count_result = await db.execute(
+            select(UserMemory).where(
+                UserMemory.user_id == user_id,
+                UserMemory.is_active == True if not include_inactive else True
+            )
+        )
+        total = len(count_result.scalars().all())
+        
+        # Get paginated memories (most recent first)
+        query = query.order_by(desc(UserMemory.created_at)).limit(limit).offset(offset)
+        result = await db.execute(query)
+        memories = result.scalars().all()
+        
+        return {
+            "status": "ok",
+            "memories": [
+                {
+                    "id": m.id,
+                    "content": m.content,
+                    "title": m.title,
+                    "conversation_id": m.conversation_id,
+                    "source": m.source,
+                    "tags": m.tags,
+                    "is_active": m.is_active,
+                    "created_at": m.created_at.isoformat(),
+                    "updated_at": m.updated_at.isoformat()
+                }
+                for m in memories
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/memory/detail/{memory_id}")
+async def get_memory_by_id(memory_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Retrieve a specific memory by its ID.
+    
+    Response:
+    {
+        "status": "ok",
+        "memory": {
+            "id": 1,
+            "user_id": 123,
+            "content": "User prefers...",
+            "title": "Communication preferences",
+            "conversation_id": 456,
+            "source": "auto_extraction",
+            "tags": ["preferences"],
+            "is_active": true,
+            "created_at": "2025-01-01T10:00:00",
+            "updated_at": "2025-01-02T15:30:00"
+        }
+    }
+    """
+    try:
+        result = await db.execute(select(UserMemory).where(UserMemory.id == memory_id))
+        memory = result.scalar_one_or_none()
+        
+        if not memory:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        
+        return {
+            "status": "ok",
+            "memory": {
+                "id": memory.id,
+                "user_id": memory.user_id,
+                "content": memory.content,
+                "title": memory.title,
+                "conversation_id": memory.conversation_id,
+                "source": memory.source,
+                "tags": memory.tags,
+                "is_active": memory.is_active,
+                "created_at": memory.created_at.isoformat(),
+                "updated_at": memory.updated_at.isoformat()
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/memory/{memory_id}")
+async def delete_memory(memory_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Soft delete a memory (sets is_active to False).
+    
+    Response:
+    {
+        "status": "ok",
+        "message": "Memory deleted successfully"
+    }
+    """
+    try:
+        result = await db.execute(select(UserMemory).where(UserMemory.id == memory_id))
+        memory = result.scalar_one_or_none()
+        
+        if not memory:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        
+        # Soft delete
+        memory.is_active = False
+        memory.updated_at = datetime.utcnow()
+        
+        await db.commit()
+        
+        return {
+            "status": "ok",
+            "message": "Memory deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/memory/{memory_id}")
+async def update_memory(
+    memory_id: int,
+    content: Optional[str] = None,
+    title: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update an existing memory.
+    
+    Request Body (all fields optional):
+    {
+        "content": "Updated content...",
+        "title": "Updated title",
+        "tags": ["updated", "tags"]
+    }
+    
+    Response:
+    {
+        "status": "ok",
+        "message": "Memory updated successfully"
+    }
+    """
+    try:
+        result = await db.execute(select(UserMemory).where(UserMemory.id == memory_id))
+        memory = result.scalar_one_or_none()
+        
+        if not memory:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        
+        # Update fields if provided
+        if content is not None:
+            memory.content = content
+        if title is not None:
+            memory.title = title
+        if tags is not None:
+            memory.tags = tags
+        
+        memory.updated_at = datetime.utcnow()
+        
+        await db.commit()
+        
+        return {
+            "status": "ok",
+            "message": "Memory updated successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 

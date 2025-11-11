@@ -337,3 +337,21 @@ Good luck with your OCR implementation! 🚀
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

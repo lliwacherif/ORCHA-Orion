@@ -1,6 +1,7 @@
 # app/services/orchestrator.py
 from typing import Dict, Any, List
 import traceback
+import requests
 from app.services.chatbot_client import call_lmstudio_chat
 from app.services.rag_client import rag_query, rag_ingest
 from app.tasks.worker import enqueue_ocr_job
@@ -8,9 +9,99 @@ from app.config import settings
 from app.utils.pdf_utils import extract_pdf_text
 from app.utils.token_tracker_pg import PostgreSQLTokenTracker
 from app.db.database import get_db
-from app.db.models import Conversation, ChatMessage, User
+from app.db.models import Conversation, ChatMessage, User, UserMemory
 from sqlalchemy import select
 from datetime import datetime
+
+def truncate_memory_to_tokens(memory_content: str, max_tokens: int = 1000) -> str:
+    """
+    Truncate memory content to approximately max_tokens, keeping the LATEST content.
+    Uses a rough approximation: 1 token ≈ 4 characters for English text.
+    
+    Args:
+        memory_content: The full memory content
+        max_tokens: Maximum number of tokens to allow (default: 1000)
+    
+    Returns:
+        Truncated memory content (most recent content preserved)
+    """
+    if not memory_content:
+        return memory_content
+    
+    # Rough approximation: 1 token ≈ 4 characters
+    max_chars = max_tokens * 4
+    
+    if len(memory_content) <= max_chars:
+        # No truncation needed
+        return memory_content
+    
+    # Truncate from the beginning, keep the latest (end) content
+    # Add indicator that content was truncated
+    truncated = "..." + memory_content[-max_chars:]
+    
+    return truncated
+
+def search_internet(query: str, max_results: int = 5) -> str:
+    """
+    Performs a web search using the Google Custom Search JSON API.
+    
+    Args:
+        query: The search query string
+        max_results: Maximum number of search results to return (default: 5, max: 10)
+    
+    Returns:
+        Formatted string containing search results or error message
+    """
+    print(f"--- [SEARCH] Performing Google search for: {query} ---")
+    
+    # The API endpoint
+    url = "https://www.googleapis.com/customsearch/v1"
+    
+    # Query parameters
+    params = {
+        'key': settings.GOOGLE_API_KEY,
+        'cx': settings.GOOGLE_SEARCH_ENGINE_ID,
+        'q': query,
+        'num': min(max_results, 10)  # Google API max is 10 per request
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()  # Raise an error for bad responses (4xx, 5xx)
+        
+        results = response.json()
+        
+        items = results.get('items')
+        if not items:
+            return "No search results found for that query."
+        
+        # Format the results into a single string for the LLM
+        context_string = "Here are the search results:\n\n"
+        for i, item in enumerate(items):
+            context_string += f"Result {i+1}:\n"
+            context_string += f"  Title: {item.get('title', 'No title')}\n"
+            context_string += f"  Snippet: {item.get('snippet', 'No snippet')}\n"
+            context_string += f"  URL: {item.get('link', 'No URL')}\n\n"
+        
+        print(f"--- [SUCCESS] Google search complete, returning {len(items)} results ---")
+        return context_string
+        
+    except requests.exceptions.HTTPError as http_err:
+        print(f"--- [ERROR] HTTP error: {http_err} ---")
+        # Handle specific error codes
+        if response.status_code == 429:
+            return "Error: You have exceeded your daily search quota (100 queries per day)."
+        if response.status_code == 403:
+            return "Error: API key or Search Engine ID is incorrect. Please check your configuration."
+        return f"Error: HTTP error occurred: {http_err}"
+        
+    except requests.exceptions.Timeout:
+        print(f"--- [ERROR] Request timeout ---")
+        return "Error: Search request timed out. Please try again."
+        
+    except Exception as e:
+        print(f"--- [ERROR] Error during search: {e} ---")
+        return f"Error: Could not perform search due to: {e}"
 
 def has_vision_attachments(attachments: List) -> tuple[bool, List[Dict[str, Any]]]:
     """
@@ -18,7 +109,7 @@ def has_vision_attachments(attachments: List) -> tuple[bool, List[Dict[str, Any]
     
     Returns:
         tuple: (has_images: bool, vision_attachments: List[Dict])
-               vision_attachments contain {"data": base64_str, "type": mime_type, "filename": str}
+               vision_attachments contain {"base64": base64_str, "type": mime_type, "filename": str}
     """
     vision_images = []
     if not attachments:
@@ -29,13 +120,21 @@ def has_vision_attachments(attachments: List) -> tuple[bool, List[Dict[str, Any]
             continue
         
         attachment_type = a.get("type", "")
-        attachment_data = a.get("data")
+        mime_type = a.get("mime", "")
+        
+        # Check type field OR mime field for image detection
+        is_image = (attachment_type == "image" or 
+                   attachment_type.startswith("image/") or 
+                   mime_type.startswith("image/"))
+        
+        # Frontend sends base64 in "base64" field, fallback to "data"
+        attachment_data = a.get("base64") or a.get("data")
         
         # Check if it's an image with base64 data (suitable for vision)
-        if attachment_type and attachment_type.startswith("image/") and attachment_data:
+        if is_image and attachment_data:
             vision_images.append({
-                "data": attachment_data,
-                "type": attachment_type,
+                "base64": attachment_data,
+                "type": mime_type if mime_type else attachment_type,
                 "filename": a.get("filename", "image")
             })
     
@@ -132,7 +231,9 @@ async def handle_chat_request(payload: Dict[str, Any], request):
         for a in attachments:
             uri = a.get("uri") if isinstance(a, dict) else a
             attachment_type = a.get("type") if isinstance(a, dict) else None
-            attachment_data = a.get("data") if isinstance(a, dict) else None
+            mime_type = a.get("mime", "") if isinstance(a, dict) else ""
+            # Frontend sends base64 in "base64" field, fallback to "data"
+            attachment_data = (a.get("base64") or a.get("data")) if isinstance(a, dict) else None
             filename = a.get("filename", "unknown") if isinstance(a, dict) else "unknown"
             
             # Check if attachment has base64 data (new flow)
@@ -164,11 +265,13 @@ async def handle_chat_request(payload: Dict[str, Any], request):
                         continue
                 
                 # Handle images - skip processing if using vision mode
-                elif attachment_type and attachment_type.startswith("image/"):
+                elif (attachment_type == "image" or 
+                      attachment_type.startswith("image/") or 
+                      mime_type.startswith("image/")):
                     if has_vision:
                         if logger:
-                            logger.info(f"🖼️ Image attachment detected: {filename} (will be processed by vision model)")
-                        # Skip individual processing - will be handled by vision API
+                            logger.info(f"🖼️ Image attachment detected: {filename} (will be processed by Gemma vision model)")
+                        # Skip individual processing - will be handled by Gemma vision API
                     else:
                         if logger:
                             logger.info(f"🖼️ Image attachment detected: {filename} (OCR not yet implemented for base64 images)")
@@ -245,6 +348,61 @@ async def handle_chat_request(payload: Dict[str, Any], request):
             ctx_text += f"[{src}] {txt[:800]}\n\n"
         messages.append({"role": "system", "content": ctx_text})
     
+    # Load user memories for context (if not a memory extraction request)
+    # Load the 5 most recent active memories
+    if not is_memory_request:
+        try:
+            memory_result = await db_session.execute(
+                select(UserMemory)
+                .where(
+                    UserMemory.user_id == user_id_int,
+                    UserMemory.is_active == True
+                )
+                .order_by(UserMemory.created_at.desc())
+                .limit(5)
+            )
+            user_memories = memory_result.scalars().all()
+            
+            if user_memories:
+                # Combine all memories into one context block
+                memory_content = "=== USER MEMORY ===\n"
+                total_chars = 0
+                
+                for idx, memory in enumerate(reversed(user_memories), 1):  # Oldest to newest
+                    # Add memory with metadata
+                    memory_entry = f"\n[Memory {idx}"
+                    if memory.title:
+                        memory_entry += f" - {memory.title}"
+                    if memory.created_at:
+                        memory_entry += f" | {memory.created_at.strftime('%Y-%m-%d')}"
+                    memory_entry += f"]\n{memory.content}\n"
+                    
+                    memory_content += memory_entry
+                    total_chars += len(memory_entry)
+                
+                # Truncate combined memory to max 2000 tokens (more space for multiple memories)
+                truncated_memory = truncate_memory_to_tokens(memory_content, max_tokens=2000)
+                
+                # Add memory as system context
+                messages.append({
+                    "role": "system",
+                    "content": truncated_memory
+                })
+                
+                if logger:
+                    if len(memory_content) > len(truncated_memory):
+                        logger.info(f"💭 Loaded {len(user_memories)} memories ({len(truncated_memory)} chars, truncated from {len(memory_content)} chars, ~{len(truncated_memory)//4} tokens)")
+                    else:
+                        logger.info(f"💭 Loaded {len(user_memories)} memories ({len(truncated_memory)} chars, ~{len(truncated_memory)//4} tokens)")
+            else:
+                if logger:
+                    logger.info("💭 No active memories found for this user")
+                    
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to load user memories: {e}")
+            # Non-fatal: continue without memory
+    
     # Get conversation history from database (last 10 messages for context)
     # IMPORTANT: Only load history BEFORE the current user message to avoid including it
     if not conversation_history:  # Only use DB history if frontend didn't provide it
@@ -310,70 +468,70 @@ Please answer the user's question based on the document content above."""
         # No PDF attached, use original message
         enhanced_message = message
     
-    # Add current user message with vision support
-    if has_vision:
-        # Format message for LM Studio vision API
-        if logger:
-            logger.info(f"🎨 Formatting message for vision API with {len(vision_images)} image(s)")
-        
-        # Build content array with text and images
-        content = [{"type": "text", "text": enhanced_message}]
-        
-        # Add each image in vision format
-        for img in vision_images:
-            # Ensure base64 data doesn't have data URL prefix
-            base64_data = img["data"]
-            if base64_data.startswith("data:"):
-                # Strip the data URL prefix if present
-                base64_data = base64_data.split(",", 1)[1] if "," in base64_data else base64_data
+    # 5) Route to appropriate model based on attachment type
+    try:
+        # Check if we have vision attachments -> Route to Gemma in LM Studio
+        if has_vision:
+            if logger:
+                logger.info(f"🎨 Routing to Gemma model in LM Studio with {len(vision_images)} image(s)")
+                logger.info(f"🎨 Model: {settings.GEMMA_MODEL}")
+                for i, img in enumerate(vision_images):
+                    logger.info(f"  📷 Image {i+1}: {img['filename']} ({img['type']})")
             
-            # Determine image format from MIME type
-            img_format = img["type"].split("/")[1] if "/" in img["type"] else "jpeg"
+            # Build multimodal content array with text and images
+            # Use wrapper text if message is empty
+            text_content = enhanced_message if enhanced_message.strip() else "User provided image; analyze it"
             
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/{img_format};base64,{base64_data}"
-                }
-            })
+            content = [{"type": "text", "text": text_content}]
+            
+            # Add each image
+            for i, img in enumerate(vision_images):
+                base64_data = img["base64"]
+                # Strip data URL prefix if present
+                if base64_data.startswith("data:"):
+                    base64_data = base64_data.split(",", 1)[1] if "," in base64_data else base64_data
+                
+                # Determine image format from MIME type
+                img_format = img["type"].split("/")[1] if "/" in img["type"] else "jpeg"
+                
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/{img_format};base64,{base64_data}"
+                    }
+                })
+                
+                if logger:
+                    logger.info(f"  📷 Added image to content: {img['filename']} (format: {img_format})")
+            
+            # Add multimodal message to messages array
+            messages.append({"role": "user", "content": content})
+            
+            # Call LM Studio with Gemma model
+            resp = await call_lmstudio_chat(
+                messages, 
+                model=settings.GEMMA_MODEL,  # Use Gemma model for images
+                max_tokens=2048,  # Reasonable limit for multimodal
+                timeout=settings.LM_TIMEOUT
+            )
             
             if logger:
-                logger.info(f"  📷 Added image: {img['filename']} (format: {img_format})")
+                logger.info(f"✅ Gemma response received")
         
-        messages.append({"role": "user", "content": content})
-    else:
-        # Standard text-only message
-        messages.append({"role": "user", "content": enhanced_message})
-
-    # 5) call LM Studio with vision support if needed
-    try:
-        if logger:
-            logger.info(f"Calling LM Studio with {len(messages)} messages")
-        
-        # Use vision model if images are present
-        model_to_use = settings.LMSTUDIO_VISION_MODEL if has_vision else None
-        max_tokens = 1024 if has_vision else None  # Limit tokens for vision requests
-        
-        if has_vision and logger:
-            logger.info(f"🎨 Using vision model: {model_to_use}")
-            logger.info(f"🎨 Vision mode active: sending {len(vision_images)} image(s)")
-            # Log message structure for debugging
-            last_msg = messages[-1] if messages else None
-            if last_msg and isinstance(last_msg.get("content"), list):
-                logger.info(f"🎨 Message content is array with {len(last_msg['content'])} items")
-                for i, item in enumerate(last_msg['content']):
-                    if item.get('type') == 'image_url':
-                        img_url = item.get('image_url', {}).get('url', '')
-                        logger.info(f"🎨   Item {i}: image (url length: {len(img_url)} chars)")
-                    else:
-                        logger.info(f"🎨   Item {i}: {item.get('type', 'unknown')}")
-        
-        resp = await call_lmstudio_chat(
-            messages, 
-            model=model_to_use,
-            max_tokens=max_tokens,
-            timeout=settings.LM_TIMEOUT
-        )
+        else:
+            # No images -> Route to standard LM Studio (gpt-oss20b)
+            if logger:
+                logger.info(f"📝 Routing to LM Studio (text-only) with {len(messages)} messages")
+            
+            # Add current user message (text-only)
+            messages.append({"role": "user", "content": enhanced_message})
+            
+            # Call LM Studio with default model (gpt-oss20b)
+            resp = await call_lmstudio_chat(
+                messages, 
+                model=None,  # Use default loaded model (gpt-oss20b)
+                timeout=settings.LM_TIMEOUT
+            )
         
         if logger:
             logger.info(f"LM Studio response received successfully")
@@ -477,6 +635,12 @@ Please answer the user's question based on the document content above."""
             result["ingested_documents"] = len(ingested_docs)
             if pdf_content:
                 result["pdf_text_length"] = len(pdf_content)
+            # Add vision processing info
+            if has_vision:
+                result["vision_processed"] = True
+                result["images_count"] = len(vision_images)
+                result["model_used"] = settings.GEMMA_MODEL
+                result["image_filenames"] = [img.get("filename", "unknown") for img in vision_images]
         
         if logger:
             logger.info(f"Returning result with status: {result['status']}")
@@ -639,3 +803,214 @@ async def handle_predict_request(payload: Dict[str, Any], request):
     score = sum(1 for v in features.values() if isinstance(v, (int, float)))
     reasons = ["stub: numeric feature count"]
     return {"status": "ok", "score": float(score), "reasons": reasons}
+
+async def handle_web_search_request(payload: Dict[str, Any], request):
+    """
+    Handles web search requests with LLM refinement.
+    
+    Flow:
+    1. User activates search mode in frontend
+    2. Query is sent to this handler
+    3. Perform web search using DuckDuckGo
+    4. Send search results to LLM for refinement
+    5. Return LLM's refined response to frontend
+    
+    payload: {
+        user_id: str,
+        tenant_id: str (optional),
+        query: str (the search query),
+        max_results: int (optional, default: 5),
+        conversation_id: int (optional, to maintain conversation context)
+    }
+    """
+    logger = getattr(request.state, "logger", None)
+    user_id = payload.get("user_id")
+    query = payload.get("query", "")
+    max_results = payload.get("max_results", 5)
+    conversation_id = payload.get("conversation_id")
+    tenant_id = payload.get("tenant_id")
+    
+    if not query:
+        return {
+            "status": "error",
+            "error": "Search query is required"
+        }
+    
+    # Get database session
+    db_session = getattr(request.state, 'db_session', None)
+    if not db_session:
+        if logger:
+            logger.error("No database session available")
+        return {"status": "error", "error": "Database session not available"}
+    
+    # Convert user_id to int for database operations
+    user_id_int = int(user_id) if isinstance(user_id, str) else user_id
+    
+    try:
+        # Step 1: Perform web search
+        if logger:
+            logger.info(f"🔍 Web search requested: '{query}'")
+        
+        search_results = search_internet(query, max_results=max_results)
+        
+        if logger:
+            logger.info(f"✅ Search completed, results length: {len(search_results)} chars")
+        
+        # Step 2: Get or create conversation for context
+        conversation = None
+        if conversation_id:
+            # Use existing conversation
+            conv_result = await db_session.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id_int,
+                    Conversation.is_active == True
+                )
+            )
+            conversation = conv_result.scalar_one_or_none()
+        
+        if not conversation:
+            # Create new conversation for web search
+            conversation = Conversation(
+                user_id=user_id_int,
+                tenant_id=tenant_id,
+                title=f"Web Search: {query[:50]}"
+            )
+            db_session.add(conversation)
+            await db_session.commit()
+            await db_session.refresh(conversation)
+            if logger:
+                logger.info(f"Created new search conversation {conversation.id}")
+        
+        # Store user's search query as a message
+        user_message = ChatMessage(
+            conversation_id=conversation.id,
+            role="user",
+            content=f"[Web Search] {query}",
+            created_at=datetime.utcnow()
+        )
+        db_session.add(user_message)
+        await db_session.commit()
+        
+        # Step 3: Build messages for LLM to refine the search results
+        system_prompt = """You are AURA, an advanced AI assistant. The user has performed a web search, and you have been provided with the search results. Your task is to:
+1. Analyze the search results carefully
+2. Extract the most relevant and useful information
+3. Present a clear, concise, and well-organized summary to the user
+4. Include source URLs when referencing specific information
+5. If the search results don't fully answer the query, acknowledge this
+
+Be helpful, accurate, and cite your sources."""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"Web search results for query: '{query}'\n\n{search_results}"},
+            {"role": "user", "content": f"Based on these web search results, please provide me with a comprehensive answer to: {query}"}
+        ]
+        
+        # Step 4: Call LLM to refine the results
+        if logger:
+            logger.info("🤖 Sending search results to LLM for refinement")
+        
+        resp = await call_lmstudio_chat(
+            messages,
+            model=None,  # Use default model
+            max_tokens=2048,
+            timeout=settings.LM_TIMEOUT
+        )
+        
+        # Extract LLM response
+        assistant_message = ""
+        total_tokens = 0
+        if resp.get("choices") and len(resp["choices"]) > 0:
+            message_obj = resp["choices"][0].get("message", {})
+            assistant_message = message_obj.get("content", "")
+            
+            if "usage" in resp:
+                usage = resp["usage"]
+                total_tokens = usage.get('total_tokens', 0)
+                if logger:
+                    logger.info(f"📊 Tokens - Prompt: {usage.get('prompt_tokens')}, Completion: {usage.get('completion_tokens')}, Total: {total_tokens}")
+        
+        if not assistant_message:
+            assistant_message = "I apologize, but I couldn't generate a proper response from the search results. Please try again."
+            if logger:
+                logger.warning("LLM returned empty message for search refinement")
+        
+        # Store assistant's refined response
+        assistant_message_db = ChatMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=assistant_message,
+            token_count=total_tokens,
+            model_used=resp.get("model", "unknown"),
+            created_at=datetime.utcnow()
+        )
+        db_session.add(assistant_message_db)
+        
+        # Update conversation timestamp
+        conversation.updated_at = datetime.utcnow()
+        await db_session.commit()
+        
+        # Track token usage
+        token_usage_info = {}
+        if total_tokens > 0 and user_id:
+            try:
+                tracker = PostgreSQLTokenTracker(db_session)
+                token_usage_info = await tracker.increment_tokens(
+                    user_id=user_id_int,
+                    tokens_used=total_tokens,
+                    logger=logger
+                )
+                if logger:
+                    logger.info(f"💳 Token usage updated: {token_usage_info.get('current_usage')} total")
+            except Exception as e:
+                if logger:
+                    logger.warning(f"Token tracking failed (non-fatal): {e}")
+        
+        # Return refined response
+        if logger:
+            logger.info(f"✅ Web search completed successfully, returning refined response")
+        
+        return {
+            "status": "ok",
+            "message": assistant_message,
+            "conversation_id": conversation.id,
+            "search_query": query,
+            "raw_search_results": search_results,
+            "results_count": max_results,
+            "token_usage": token_usage_info,
+            "model_response": resp
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        error_traceback = traceback.format_exc()
+        
+        if logger:
+            logger.error(f"❌ Web search failed: {error_msg}")
+            logger.error(f"Traceback:\n{error_traceback}")
+        
+        # Store error if conversation exists
+        if conversation:
+            try:
+                error_message_db = ChatMessage(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content="Sorry, I encountered an error processing your web search. Please try again.",
+                    error_message=error_msg,
+                    created_at=datetime.utcnow()
+                )
+                db_session.add(error_message_db)
+                await db_session.commit()
+            except Exception as db_error:
+                if logger:
+                    logger.error(f"Failed to store error message: {db_error}")
+        
+        return {
+            "status": "error",
+            "error": error_msg,
+            "error_type": type(e).__name__,
+            "message": "Sorry, I encountered an error processing your web search. Please try again.",
+            "conversation_id": conversation.id if conversation else None
+        }

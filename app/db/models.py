@@ -108,3 +108,27 @@ class Pulse(Base):
         return f"<Pulse(id={self.id}, user_id={self.user_id}, generated_at='{self.generated_at}')>"
 
 
+class UserMemory(Base):
+    """User Memory - AI-extracted personal information and preferences stored for context.
+    Supports multiple memories per user for complete history tracking."""
+    __tablename__ = "user_memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)  # Removed unique constraint
+    content = Column(Text, nullable=False)  # The extracted memory content
+    title = Column(String(200), nullable=True)  # Optional title/summary
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True)  # Link to source conversation
+    source = Column(String(50), default="manual", nullable=False)  # manual, auto_extraction, import, etc.
+    tags = Column(JSON, nullable=True)  # Categorization tags (e.g., ["preferences", "personal"])
+    is_active = Column(Boolean, default=True, nullable=False)  # Soft delete support
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    user = relationship("User")
+    conversation = relationship("Conversation")
+
+    def __repr__(self):
+        return f"<UserMemory(id={self.id}, user_id={self.user_id}, title='{self.title}', created_at='{self.created_at}')>"
+
+
