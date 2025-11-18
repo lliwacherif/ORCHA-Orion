@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = "your-google-api-key-here"
     GOOGLE_SEARCH_ENGINE_ID: str = "your-search-engine-id-here"
 
+    # External widget defaults
+    DEFAULT_WIDGET_USER_ID: int = 1
+    DEFAULT_WIDGET_TENANT_ID: str = "external_widget"
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

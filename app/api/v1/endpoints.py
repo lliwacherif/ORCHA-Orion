@@ -19,6 +19,7 @@ from app.db.models import User, Conversation, ChatMessage, UserMemory
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from datetime import datetime
+from app.config import settings
 
 router = APIRouter()
 
@@ -41,6 +42,25 @@ class ChatRequest(BaseModel):
     use_rag: Optional[bool] = False
     conversation_history: Optional[List[Message]] = Field(default_factory=list)
     conversation_id: Optional[int] = None  # New: Link to existing conversation
+
+class ChatV2Request(BaseModel):
+    text: str = Field(..., min_length=1, description="User message to send to ORCHA")
+    user_id: Optional[int] = Field(
+        default=None,
+        description="Existing ORCHA user ID. Defaults to settings.DEFAULT_WIDGET_USER_ID."
+    )
+    tenant_id: Optional[str] = Field(
+        default=None,
+        description="Optional tenant identifier. Defaults to settings.DEFAULT_WIDGET_TENANT_ID."
+    )
+    conversation_id: Optional[int] = Field(
+        default=None,
+        description="Resume an existing conversation if provided."
+    )
+    use_rag: Optional[bool] = Field(
+        default=False,
+        description="Set true to force Retrieval-Augmented responses."
+    )
 
 class OCRRequest(BaseModel):
     user_id: str
@@ -205,6 +225,59 @@ async def orcha_chat(req: ChatRequest, request: Request, db: AsyncSession = Depe
     request.state.db_session = db
     result = await handle_chat_request(req.dict(), request)
     return result
+
+@router.post("/orcha/chat-v2")
+async def orcha_chat_v2(req: ChatV2Request, request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Lightweight chat endpoint tailored for the external iframe widget.
+    Accepts only plain text (plus optional identifiers) and returns a normalized payload:
+    {
+        "success": true,
+        "message": "",
+        "data": {
+            "text": "...",
+            "conversation_id": 123
+        }
+    }
+    """
+    request.state.db_session = db
+
+    resolved_user_id = req.user_id or settings.DEFAULT_WIDGET_USER_ID
+    resolved_tenant_id = req.tenant_id or settings.DEFAULT_WIDGET_TENANT_ID
+
+    chat_payload = {
+        "user_id": str(resolved_user_id),
+        "tenant_id": resolved_tenant_id,
+        "message": req.text,
+        "attachments": [],
+        "use_rag": req.use_rag,
+        "conversation_history": [],
+        "conversation_id": req.conversation_id,
+    }
+
+    result = await handle_chat_request(chat_payload, request)
+    success = result.get("status") == "ok"
+
+    data = {
+        "text": result.get("message", ""),
+        "conversation_id": result.get("conversation_id"),
+    }
+
+    if success:
+        if result.get("contexts"):
+            data["contexts"] = result["contexts"]
+        return {
+            "success": True,
+            "message": "",
+            "data": data,
+        }
+
+    error_message = result.get("error") or result.get("message") or "Unable to process chat request."
+    return {
+        "success": False,
+        "message": error_message,
+        "data": data,
+    }
 
 @router.post("/orcha/ocr")
 async def orcha_ocr(req: OCRRequest, request: Request):
