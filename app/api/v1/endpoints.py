@@ -358,7 +358,13 @@ async def orcha_web_search(req: WebSearchRequest, request: Request, db: AsyncSes
     result = await handle_web_search_request(req.dict(), request)
     return result
 
-@router.post("/orcha/doc-check")
+# OPTIONS handler for CORS preflight (might help with nginx)
+@router.options("/orcha/doc-check")
+async def orcha_doc_check_options():
+    """Handle CORS preflight requests for doc-check endpoint."""
+    return {"status": "ok"}
+
+@router.put("/orcha/doc-check")
 async def orcha_doc_check(
     file: UploadFile = File(..., description="Document file (PDF or image)"),
     label: str = Form(..., description="Document type label (e.g., passport, cin, driver_license)"),

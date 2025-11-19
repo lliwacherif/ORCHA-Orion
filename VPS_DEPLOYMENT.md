@@ -139,13 +139,39 @@ server {
     listen 80;
     server_name your-domain.com;
 
+    # File upload size limit (important for doc-check endpoint)
+    client_max_body_size 20M;
+
+    # Timeouts for long-running requests (OCR can take time)
+    proxy_connect_timeout 120s;
+    proxy_send_timeout 120s;
+    proxy_read_timeout 120s;
+
     location / {
+        # Allow standard HTTP methods
+        if ($request_method !~ ^(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$ ) {
+            return 405;
+        }
+
         proxy_pass http://localhost:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Disable buffering for file uploads
+        proxy_buffering off;
+        proxy_request_buffering off;
     }
+
+    # Logging
+    access_log /var/log/nginx/orcha_access.log;
+    error_log /var/log/nginx/orcha_error.log;
 }
 ```
 
@@ -154,6 +180,8 @@ sudo ln -s /etc/nginx/sites-available/orcha /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl restart nginx
 ```
+
+**Note:** See `nginx_orcha.conf` for a complete configuration with SSL support.
 
 ## Python Dependencies (requirements.txt)
 
