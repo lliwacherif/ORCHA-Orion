@@ -4,7 +4,7 @@
 
 Public API endpoint for automated document verification. Accepts identity documents (passports, national IDs, driver's licenses) in PDF or image format, extracts text, and validates authenticity using AI-powered analysis.
 
-**Base URL**: `https://aura.vaeerdia.com`  
+**Base URL**: `https://aura-orcha.vaeerdia.com`  
 **Endpoint**: `PUT /api/v1/orcha/doc-check`  
 **Authentication**: None required (public API for partner integrations)
 
@@ -105,7 +105,7 @@ Content-Type: multipart/form-data
 ### Example 1: Validating a Passport (PDF)
 
 ```bash
-curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X PUT https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@passport.pdf" \
   -F "label=passport"
 ```
@@ -124,7 +124,7 @@ curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 ### Example 2: Validating a National ID (Image)
 
 ```bash
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@cin.jpg" \
   -F "label=cin"
 ```
@@ -143,7 +143,7 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 ### Example 3: Invalid Document
 
 ```bash
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@suspicious_passport.pdf" \
   -F "label=passport"
 ```
@@ -233,7 +233,7 @@ async function verifyDocument(file, label) {
   formData.append('file', file);
   formData.append('label', label);
   
-  const response = await fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+  const response = await fetch('https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check', {
     method: 'PUT',
     body: formData
     // Note: Don't set Content-Type header - browser sets it automatically with boundary
@@ -274,7 +274,7 @@ async function verifyDocument(filePath, label) {
   formData.append('file', fs.createReadStream(filePath));
   formData.append('label', label);
   
-  const response = await fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+  const response = await fetch('https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check', {
     method: 'PUT',
     body: formData
   });
@@ -305,7 +305,7 @@ def verify_document(file_path, label):
         data = {'label': label}
         
         response = requests.put(
-            'https://aura.vaeerdia.com/api/v1/orcha/doc-check',
+            'https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check',
             files=files,
             data=data
         )
@@ -339,7 +339,7 @@ $post_data = array(
     'label' => $label
 );
 
-curl_setopt($curl, CURLOPT_URL, 'https://aura.vaeerdia.com/api/v1/orcha/doc-check');
+curl_setopt($curl, CURLOPT_URL, 'https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check');
 curl_setopt($curl, CURLOPT_CUSTOMREQUEST, 'PUT');
 curl_setopt($curl, CURLOPT_POSTFIELDS, $post_data);
 curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
@@ -383,8 +383,8 @@ Currently no rate limits enforced. For production use, implement client-side rat
 
 For technical support or integration assistance:
 - **Email**: support@vaeerdia.com
-- **API Documentation**: `https://aura.vaeerdia.com/docs`
-- **Status**: Check service status at `https://aura.vaeerdia.com/health`
+- **API Documentation**: `https://aura-orcha.vaeerdia.com/docs`
+- **Status**: Check service status at `https://aura-orcha.vaeerdia.com/health`
 
 ---
 

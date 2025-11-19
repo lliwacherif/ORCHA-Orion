@@ -46,7 +46,7 @@ The external application needs to update its API call from:
 
 ### Before (POST):
 ```javascript
-fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+fetch('https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check', {
   method: 'POST',
   body: formData
 })
@@ -54,7 +54,7 @@ fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
 
 ### After (PUT):
 ```javascript
-fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+fetch('https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check', {
   method: 'PUT',
   body: formData
 })
@@ -62,14 +62,14 @@ fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
 
 ### curl Before:
 ```bash
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@document.pdf" \
   -F "label=passport"
 ```
 
 ### curl After:
 ```bash
-curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X PUT https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@document.pdf" \
   -F "label=passport"
 ```
@@ -96,7 +96,7 @@ curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 
 3. **Verify the change:**
    ```bash
-   curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+   curl -X PUT https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
      -F "file=@test.txt" \
      -F "label=passport"
    ```
@@ -114,7 +114,7 @@ curl -X PUT http://localhost:8000/api/v1/orcha/doc-check \
 
 ### Test 2: Production Test
 ```bash
-curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X PUT https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@test.pdf" \
   -F "label=passport"
 ```

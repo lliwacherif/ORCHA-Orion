@@ -40,7 +40,7 @@ sudo systemctl restart orcha  # Or however you restart your service
 >
 > Hi,
 >
-> Our FastAPI application at `aura.vaeerdia.com` has an endpoint for document verification that's being blocked by nginx with a 405 error.
+> Our FastAPI application at `aura-orcha.vaeerdia.com` has an endpoint for document verification that's being blocked by nginx with a 405 error.
 >
 > **Endpoint:** POST `/api/v1/orcha/doc-check`
 > **Issue:** Nginx returns 405 Not Allowed before the request reaches our application
@@ -92,7 +92,7 @@ sudo ufw allow 8080/tcp
 
 3. **Update external app to use:**
 ```
-http://aura.vaeerdia.com:8080/api/v1/orcha/doc-check
+http://aura-orcha.vaeerdia.com:8080/api/v1/orcha/doc-check
 ```
 
 **⚠️ Downsides:**
@@ -138,7 +138,7 @@ If you're on managed hosting (DigitalOcean, AWS, etc.):
 
 ```bash
 # From your local machine or anywhere:
-curl -v -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -v -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@test.txt" \
   -F "label=passport"
 ```

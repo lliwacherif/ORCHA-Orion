@@ -98,7 +98,7 @@ python test_post_doc_check.py
 Or use curl:
 
 ```bash
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@test_document.pdf" \
   -F "label=passport"
 ```
@@ -160,7 +160,7 @@ proxy_read_timeout 180s;
 
 1. **SSH into your VPS:**
 ```bash
-ssh your-user@aura.vaeerdia.com
+ssh your-user@aura-orcha.vaeerdia.com
 ```
 
 2. **Backup current config:**
@@ -218,7 +218,7 @@ fi
 
 ```bash
 echo "Test passport document" > test.txt
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@test.txt" \
   -F "label=passport"
 ```
@@ -226,7 +226,7 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 ### Test 2: Real PDF Document
 
 ```bash
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@passport.pdf" \
   -F "label=passport"
 ```
@@ -234,7 +234,7 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 ### Test 3: Image Document
 
 ```bash
-curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X POST https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@id_card.jpg" \
   -F "label=cin"
 ```

@@ -93,7 +93,7 @@ return _create_cors_response({
 
 ### Test 1: Preflight Request
 ```bash
-curl -X OPTIONS https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X OPTIONS https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -H "Access-Control-Request-Method: PUT" \
   -H "Access-Control-Request-Headers: content-type" \
   -H "Origin: http://localhost:3000" \
@@ -111,7 +111,7 @@ Should return:
 
 ### Test 2: Actual Request
 ```bash
-curl -X PUT https://aura.vaeerdia.com/api/v1/orcha/doc-check \
+curl -X PUT https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check \
   -F "file=@test.pdf" \
   -F "label=passport" \
   -H "Origin: http://localhost:3000" \
@@ -150,7 +150,7 @@ const formData = new FormData();
 formData.append('file', fileObject);
 formData.append('label', 'passport');
 
-fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+fetch('https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check', {
   method: 'PUT',
   body: formData
 })
@@ -209,7 +209,7 @@ location /api/v1/orcha/doc-check {
    formData.append('file', new Blob(['test']), 'test.txt');
    formData.append('label', 'passport');
    
-   fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+   fetch('https://aura-orcha.vaeerdia.com/api/v1/orcha/doc-check', {
      method: 'PUT',
      body: formData
    }).then(r => r.json()).then(console.log);
