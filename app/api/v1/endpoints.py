@@ -75,6 +75,12 @@ class OCRExtractRequest(BaseModel):
     filename: Optional[str] = "image"
     language: Optional[str] = "en"  # en, fr, ar, ch, etc.
 
+class DocCheckRequest(BaseModel):
+    document_data: str = Field(..., description="Base64 encoded document (PDF or image)")
+    document_type: str = Field(..., description="Type of document: passport, cin, id_card, driver_license, etc.")
+    mime_type: Optional[str] = Field(default="application/pdf", description="MIME type: application/pdf, image/png, image/jpeg, etc.")
+    filename: Optional[str] = Field(default="document", description="Original filename")
+
 class RAGQuery(BaseModel):
     user_id: str
     tenant_id: Optional[str] = None
@@ -354,6 +360,225 @@ async def orcha_web_search(req: WebSearchRequest, request: Request, db: AsyncSes
     request.state.db_session = db
     result = await handle_web_search_request(req.dict(), request)
     return result
+
+@router.post("/orcha/doc-check")
+async def orcha_doc_check(req: DocCheckRequest, request: Request):
+    """
+    Document verification endpoint for external applications.
+    No authentication required - designed for partner integrations.
+    
+    Accepts documents (PDF or images) and validates their authenticity.
+    Returns validation result with brief explanation.
+    
+    Request:
+    {
+        "document_data": "base64_encoded_document",
+        "document_type": "passport" | "cin" | "id_card" | "driver_license",
+        "mime_type": "application/pdf" | "image/png" | "image/jpeg",
+        "filename": "document.pdf"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "message": "document valide",
+        "data": {
+            "Res_validation": "Detailed validation result..."
+        }
+    }
+    """
+    from app.utils.pdf_utils import extract_pdf_text
+    from app.services.ocr_client import extract_text_from_image
+    from app.services.chatbot_client import call_lmstudio_chat
+    
+    logger = getattr(request.state, "logger", None)
+    
+    try:
+        # Step 1: Extract text from document
+        extracted_text = ""
+        
+        if req.mime_type == "application/pdf":
+            # PDF: Extract text directly
+            if logger:
+                logger.info(f"[DOC-CHECK] Extracting text from PDF: {req.filename}")
+            extracted_text = extract_pdf_text(req.document_data)
+            if logger:
+                logger.info(f"[DOC-CHECK] Extracted {len(extracted_text)} characters from PDF")
+        
+        elif req.mime_type.startswith("image/"):
+            # Image: Use OCR
+            if logger:
+                logger.info(f"[DOC-CHECK] Extracting text from image via OCR: {req.filename}")
+            ocr_result = await extract_text_from_image(
+                image_data=req.document_data,
+                filename=req.filename,
+                language="auto"
+            )
+            
+            if ocr_result.get("success"):
+                extracted_text = ocr_result.get("text", "")
+                if logger:
+                    logger.info(f"[DOC-CHECK] OCR extracted {len(extracted_text)} characters")
+            else:
+                return {
+                    "success": False,
+                    "message": "document non valide",
+                    "data": {
+                        "Res_validation": f"Unable to extract text from image: {ocr_result.get('message', 'OCR failed')}"
+                    }
+                }
+        else:
+            return {
+                "success": False,
+                "message": "document non valide",
+                "data": {
+                    "Res_validation": f"Unsupported document type: {req.mime_type}"
+                }
+            }
+        
+        if not extracted_text or len(extracted_text) < 10:
+            return {
+                "success": False,
+                "message": "document non valide",
+                "data": {
+                    "Res_validation": "Document appears to be empty or unreadable. No text could be extracted."
+                }
+            }
+        
+        # Step 2: Build specialized validation prompt based on document type
+        doc_type_lower = req.document_type.lower()
+        
+        if doc_type_lower == "passport":
+            system_prompt = """You are a document verification expert specializing in passport validation.
+Analyze the extracted text from a passport and verify its authenticity.
+
+Check for:
+- Valid passport number format
+- Issuing country and authority
+- Valid dates (issue date, expiry date)
+- Personal information consistency (name, date of birth, nationality)
+- Machine Readable Zone (MRZ) if present
+- Document structure and mandatory fields
+
+Respond briefly (2-3 sentences maximum) with:
+1. VALID or INVALID determination
+2. Key reason(s) for your assessment
+3. Any suspicious elements if invalid
+
+Be concise and professional."""
+
+        elif doc_type_lower in ["cin", "id_card", "national_id"]:
+            system_prompt = """You are a document verification expert specializing in national identity card validation.
+Analyze the extracted text from a national ID card (CIN/ID Card) and verify its authenticity.
+
+Check for:
+- Valid ID number format
+- Issuing authority and country
+- Valid dates (issue date, expiry date if applicable)
+- Personal information (name, date of birth, address, nationality)
+- Document structure and mandatory fields
+- Consistency of information
+
+Respond briefly (2-3 sentences maximum) with:
+1. VALID or INVALID determination
+2. Key reason(s) for your assessment
+3. Any missing or suspicious elements if invalid
+
+Be concise and professional."""
+
+        elif doc_type_lower in ["driver_license", "driving_license"]:
+            system_prompt = """You are a document verification expert specializing in driver's license validation.
+Analyze the extracted text from a driver's license and verify its authenticity.
+
+Check for:
+- Valid license number format
+- Issuing authority and region
+- Valid dates (issue date, expiry date)
+- Personal information (name, date of birth, address)
+- License categories/classes
+- Document structure and mandatory fields
+
+Respond briefly (2-3 sentences maximum) with:
+1. VALID or INVALID determination
+2. Key reason(s) for your assessment
+3. Any missing or suspicious elements if invalid
+
+Be concise and professional."""
+
+        else:
+            system_prompt = f"""You are a document verification expert.
+Analyze the extracted text from a {req.document_type} document and verify its authenticity.
+
+Check for:
+- Document structure and completeness
+- Presence of mandatory fields
+- Consistency of information
+- Valid dates and formatting
+- Issuing authority information
+
+Respond briefly (2-3 sentences maximum) with:
+1. VALID or INVALID determination
+2. Key reason(s) for your assessment
+3. Any missing or suspicious elements if invalid
+
+Be concise and professional."""
+        
+        # Step 3: Call LLM for validation
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Validate this {req.document_type} document:\n\n{extracted_text[:4000]}"}
+        ]
+        
+        if logger:
+            logger.info(f"[DOC-CHECK] Sending to LLM for validation: {req.document_type}")
+        
+        llm_response = await call_lmstudio_chat(
+            messages,
+            model=None,
+            max_tokens=300,  # Brief response
+            timeout=60
+        )
+        
+        validation_result = ""
+        if llm_response.get("choices") and len(llm_response["choices"]) > 0:
+            validation_result = llm_response["choices"][0].get("message", {}).get("content", "")
+        
+        if not validation_result:
+            return {
+                "success": False,
+                "message": "document non valide",
+                "data": {
+                    "Res_validation": "Validation service unavailable. Please try again."
+                }
+            }
+        
+        # Step 4: Determine if document is valid based on LLM response
+        validation_lower = validation_result.lower()
+        is_valid = "valid" in validation_lower and "invalid" not in validation_lower
+        
+        if logger:
+            logger.info(f"[DOC-CHECK] Validation complete: {'VALID' if is_valid else 'INVALID'}")
+        
+        return {
+            "success": is_valid,
+            "message": "document valide" if is_valid else "document non valide",
+            "data": {
+                "Res_validation": validation_result
+            }
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        if logger:
+            logger.error(f"[DOC-CHECK] Error: {error_msg}")
+        
+        return {
+            "success": False,
+            "message": "document non valide",
+            "data": {
+                "Res_validation": f"Error during validation: {error_msg}"
+            }
+        }
 
 @router.get("/models")
 async def list_models():
