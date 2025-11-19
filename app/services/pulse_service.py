@@ -9,26 +9,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-PULSE_GENERATION_PROMPT = """Your task is to generate out of all these chats that follows a daily Pulse, a concise, structured summary that captures only the most relevant and meaningful information from these chats.
+PULSE_GENERATION_PROMPT = """Your task is to generate a Professional Daily Pulse from the following chats, with the language that been used the most in these chats (French/English). Create a concise, structured summary focused exclusively on the user's professional activities and work-related conversations.
 
 Focus on identifying:
-✅ Key topics and recurring themes.
-📌 Important reminders, tasks, or follow-ups the user mentioned.
-💡 Useful insights, ideas, or decisions made.
-🚫 Ignore irrelevant small talk or casual conversations.
+✅ Key Projects & Meetings: What were the main projects, meetings, or professional topics discussed?
+📌 Action Items & Deadlines: What are the specific tasks, follow-ups, or deadlines the user mentioned or was assigned?
+💡 Key Decisions & Insights: What important decisions were made, strategies discussed, or professional insights gained?
+🚫 Strictly Ignore: All personal, casual, or non-work-related conversations (e.g., small talk, personal plans, general news).
 
 Output format:
-🧭 Daily Pulse — [Date]
-🔹 Main Topics:
+🧭 Professional Pulse — [Date]
+🔹 Main Projects / Meetings:
 - ...
-📋 Important Actions / Reminders:
+📋 Action Items / Deadlines:
 - ...
-💭 Insights & Ideas:
+💭 Key Decisions & Insights:
 - ...
 🕒 Summary Context:
-(Brief sentence describing the overall tone or focus of the user's day)
+(Brief sentence describing the user's primary work focus or challenges for the day)
 
-If you think that there is nothing important you just answer by "Nothing important for now."
+If there is nothing important, respond with "Nothing important for now."
 """
 
 
@@ -267,3 +267,6 @@ async def get_user_pulse(user_id: int, db_session: AsyncSession) -> Optional[dic
     except Exception as e:
         logger.error(f"Failed to get pulse for user {user_id}: {e}")
         return None
+
+#This solution is designed totally by Liwa Cherif, an advanced AI solution
+#You won't be able to understand it.

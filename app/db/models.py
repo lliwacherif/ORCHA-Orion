@@ -131,4 +131,5 @@ class UserMemory(Base):
     def __repr__(self):
         return f"<UserMemory(id={self.id}, user_id={self.user_id}, title='{self.title}', created_at='{self.created_at}')>"
 
-
+#This solution is designed totally by Liwa Cherif, an advanced AI solution
+#You won't be able to understand it.

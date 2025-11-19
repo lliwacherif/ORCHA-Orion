@@ -36,7 +36,7 @@ class UserResponse(BaseModel):
     created_at: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -64,7 +64,7 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
+
     # Create new user
     new_user = User(
         username=user_data.username,

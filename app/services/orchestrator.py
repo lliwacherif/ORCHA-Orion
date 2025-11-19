@@ -1014,3 +1014,5 @@ Be helpful, accurate, and cite your sources."""
             "message": "Sorry, I encountered an error processing your web search. Please try again.",
             "conversation_id": conversation.id if conversation else None
         }
+#This solution is designed totally by Liwa Cherif, an advanced AI solution
+#You won't be able to understand it.

@@ -29,9 +29,9 @@ async def create_database():
         
         if not exists:
             await conn.execute(text("CREATE DATABASE orcha_db"))
-            print("✅ Database 'orcha_db' created successfully!")
+            print("[OK] Database 'orcha_db' created successfully!")
         else:
-            print("ℹ️  Database 'orcha_db' already exists")
+            print("[INFO] Database 'orcha_db' already exists")
     
     await engine.dispose()
 
@@ -42,7 +42,7 @@ async def create_tables():
     async with engine.begin() as conn:
         # Create all tables
         await conn.run_sync(Base.metadata.create_all)
-        print("✅ All tables created successfully!")
+        print("[OK] All tables created successfully!")
         print("   - users")
         print("   - token_usage")
     
@@ -50,20 +50,20 @@ async def create_tables():
 
 async def init_db():
     """Initialize database: create database and tables."""
-    print("🔧 Initializing database...")
-    print(f"📍 Database URL: {settings.DATABASE_URL}")
+    print("[SETUP] Initializing database...")
+    print(f"[INFO] Database URL: {settings.DATABASE_URL}")
     print()
     
     try:
         await create_database()
         await create_tables()
         print()
-        print("✅ Database initialization complete!")
+        print("[SUCCESS] Database initialization complete!")
         print()
         print("You can now start the server:")
         print("  uvicorn app.main:app --reload")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] {e}")
         print()
         print("Troubleshooting:")
         print("  1. Make sure PostgreSQL is running")
@@ -74,6 +74,24 @@ async def init_db():
 
 if __name__ == "__main__":
     asyncio.run(init_db())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
