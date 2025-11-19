@@ -1,5 +1,6 @@
 # app/api/v1/endpoints.py
 from fastapi import APIRouter, Request, HTTPException, Depends, UploadFile, File, Form
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any, Union
 import base64
@@ -358,11 +359,31 @@ async def orcha_web_search(req: WebSearchRequest, request: Request, db: AsyncSes
     result = await handle_web_search_request(req.dict(), request)
     return result
 
-# OPTIONS handler for CORS preflight (might help with nginx)
+# Helper function to create CORS-friendly responses
+def _create_cors_response(content: dict, status_code: int = 200):
+    """Create a JSONResponse with explicit CORS headers to prevent nginx from blocking."""
+    from fastapi.responses import JSONResponse
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return JSONResponse(content=content, status_code=status_code, headers=headers)
+
+# OPTIONS handler for CORS preflight (fix CORS errors with nginx)
 @router.options("/orcha/doc-check")
 async def orcha_doc_check_options():
     """Handle CORS preflight requests for doc-check endpoint."""
-    return {"status": "ok"}
+    from fastapi.responses import Response
+    
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "86400",  # 24 hours
+    }
+    
+    return Response(status_code=200, headers=headers)
 
 @router.put("/orcha/doc-check")
 async def orcha_doc_check(
@@ -434,30 +455,30 @@ async def orcha_doc_check(
                 if logger:
                     logger.info(f"[DOC-CHECK] OCR extracted {len(extracted_text)} characters")
             else:
-                return {
+                return _create_cors_response({
                     "success": False,
                     "message": "document non valide",
                     "data": {
                         "Res_validation": f"Unable to extract text from image: {ocr_result.get('message', 'OCR failed')}"
                     }
-                }
+                })
         else:
-            return {
+            return _create_cors_response({
                 "success": False,
                 "message": "document non valide",
                 "data": {
                     "Res_validation": f"Unsupported document type: {content_type}. Please upload PDF or image files."
                 }
-            }
+            })
         
         if not extracted_text or len(extracted_text) < 10:
-            return {
+            return _create_cors_response({
                 "success": False,
                 "message": "document non valide",
                 "data": {
                     "Res_validation": "Document appears to be empty or unreadable. No text could be extracted."
                 }
-            }
+            })
         
         # Step 3: Build specialized validation prompt based on label
         label_lower = label.lower()
@@ -503,13 +524,13 @@ Be concise and professional."""
             validation_result = llm_response["choices"][0].get("message", {}).get("content", "")
         
         if not validation_result:
-            return {
+            return _create_cors_response({
                 "success": False,
                 "message": "document non valide",
                 "data": {
                     "Res_validation": "Validation service unavailable. Please try again."
                 }
-            }
+            })
         
         # Step 5: Determine if document is valid based on LLM response
         validation_lower = validation_result.lower()
@@ -518,26 +539,26 @@ Be concise and professional."""
         if logger:
             logger.info(f"[DOC-CHECK] Validation complete: {'VALID' if is_valid else 'INVALID'}")
         
-        return {
+        return _create_cors_response({
             "success": is_valid,
             "message": "document valide" if is_valid else "document non valide",
             "data": {
                 "Res_validation": validation_result
             }
-        }
+        })
         
     except Exception as e:
         error_msg = str(e)
         if logger:
             logger.error(f"[DOC-CHECK] Error: {error_msg}")
         
-        return {
+        return _create_cors_response({
             "success": False,
             "message": "document non valide",
             "data": {
                 "Res_validation": f"Error during validation: {error_msg}"
             }
-        }
+        })
 
 @router.get("/models")
 async def list_models():
