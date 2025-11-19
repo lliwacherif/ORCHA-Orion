@@ -1,7 +1,8 @@
 # app/api/v1/endpoints.py
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends, UploadFile, File, Form
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any, Union
+import base64
 from app.services.orchestrator import (
     handle_chat_request,
     handle_ocr_request,
@@ -75,11 +76,7 @@ class OCRExtractRequest(BaseModel):
     filename: Optional[str] = "image"
     language: Optional[str] = "en"  # en, fr, ar, ch, etc.
 
-class DocCheckRequest(BaseModel):
-    document_data: str = Field(..., description="Base64 encoded document (PDF or image)")
-    document_type: str = Field(..., description="Type of document: passport, cin, id_card, driver_license, etc.")
-    mime_type: Optional[str] = Field(default="application/pdf", description="MIME type: application/pdf, image/png, image/jpeg, etc.")
-    filename: Optional[str] = Field(default="document", description="Original filename")
+# DocCheckRequest removed - using File upload instead
 
 class RAGQuery(BaseModel):
     user_id: str
@@ -362,21 +359,21 @@ async def orcha_web_search(req: WebSearchRequest, request: Request, db: AsyncSes
     return result
 
 @router.post("/orcha/doc-check")
-async def orcha_doc_check(req: DocCheckRequest, request: Request):
+async def orcha_doc_check(
+    file: UploadFile = File(..., description="Document file (PDF or image)"),
+    label: str = Form(..., description="Document type label (e.g., passport, cin, driver_license)"),
+    request: Request = None
+):
     """
     Document verification endpoint for external applications.
     No authentication required - designed for partner integrations.
     
-    Accepts documents (PDF or images) and validates their authenticity.
+    Accepts documents (PDF or images) via multipart/form-data and validates their authenticity.
     Returns validation result with brief explanation.
     
-    Request:
-    {
-        "document_data": "base64_encoded_document",
-        "document_type": "passport" | "cin" | "id_card" | "driver_license",
-        "mime_type": "application/pdf" | "image/png" | "image/jpeg",
-        "filename": "document.pdf"
-    }
+    Form Data:
+    - file: Document file (PDF or image)
+    - label: What the document is (e.g., "passport", "cin", "driver_license")
     
     Response:
     {
@@ -391,27 +388,38 @@ async def orcha_doc_check(req: DocCheckRequest, request: Request):
     from app.services.ocr_client import extract_text_from_image
     from app.services.chatbot_client import call_lmstudio_chat
     
-    logger = getattr(request.state, "logger", None)
+    logger = getattr(request.state, "logger", None) if request else None
     
     try:
-        # Step 1: Extract text from document
+        # Step 1: Read file and detect MIME type
+        file_content = await file.read()
+        filename = file.filename or "document"
+        content_type = file.content_type or "application/octet-stream"
+        
+        if logger:
+            logger.info(f"[DOC-CHECK] Received file: {filename}, type: {content_type}, label: {label}")
+        
+        # Convert to base64 for processing
+        document_data_base64 = base64.b64encode(file_content).decode('utf-8')
+        
+        # Step 2: Extract text from document
         extracted_text = ""
         
-        if req.mime_type == "application/pdf":
+        if content_type == "application/pdf" or filename.lower().endswith('.pdf'):
             # PDF: Extract text directly
             if logger:
-                logger.info(f"[DOC-CHECK] Extracting text from PDF: {req.filename}")
-            extracted_text = extract_pdf_text(req.document_data)
+                logger.info(f"[DOC-CHECK] Extracting text from PDF: {filename}")
+            extracted_text = extract_pdf_text(document_data_base64)
             if logger:
                 logger.info(f"[DOC-CHECK] Extracted {len(extracted_text)} characters from PDF")
         
-        elif req.mime_type.startswith("image/"):
+        elif content_type.startswith("image/") or filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
             # Image: Use OCR
             if logger:
-                logger.info(f"[DOC-CHECK] Extracting text from image via OCR: {req.filename}")
+                logger.info(f"[DOC-CHECK] Extracting text from image via OCR: {filename}")
             ocr_result = await extract_text_from_image(
-                image_data=req.document_data,
-                filename=req.filename,
+                image_data=document_data_base64,
+                filename=filename,
                 language="auto"
             )
             
@@ -432,7 +440,7 @@ async def orcha_doc_check(req: DocCheckRequest, request: Request):
                 "success": False,
                 "message": "document non valide",
                 "data": {
-                    "Res_validation": f"Unsupported document type: {req.mime_type}"
+                    "Res_validation": f"Unsupported document type: {content_type}. Please upload PDF or image files."
                 }
             }
         
@@ -445,76 +453,21 @@ async def orcha_doc_check(req: DocCheckRequest, request: Request):
                 }
             }
         
-        # Step 2: Build specialized validation prompt based on document type
-        doc_type_lower = req.document_type.lower()
+        # Step 3: Build specialized validation prompt based on label
+        label_lower = label.lower()
         
-        if doc_type_lower == "passport":
-            system_prompt = """You are a document verification expert specializing in passport validation.
-Analyze the extracted text from a passport and verify its authenticity.
+        # Build prompt with label injected
+        system_prompt = f"""You are a document verification expert specializing in {label} validation.
+Analyze the extracted text from a {label} document and verify its authenticity.
 
 Check for:
-- Valid passport number format
-- Issuing country and authority
-- Valid dates (issue date, expiry date)
-- Personal information consistency (name, date of birth, nationality)
-- Machine Readable Zone (MRZ) if present
-- Document structure and mandatory fields
-
-Respond briefly (2-3 sentences maximum) with:
-1. VALID or INVALID determination
-2. Key reason(s) for your assessment
-3. Any suspicious elements if invalid
-
-Be concise and professional."""
-
-        elif doc_type_lower in ["cin", "id_card", "national_id"]:
-            system_prompt = """You are a document verification expert specializing in national identity card validation.
-Analyze the extracted text from a national ID card (CIN/ID Card) and verify its authenticity.
-
-Check for:
-- Valid ID number format
-- Issuing authority and country
+- Document structure and completeness specific to {label}
+- Presence of mandatory fields for {label}
+- Valid identification numbers and formats
+- Issuing authority and authenticity markers
 - Valid dates (issue date, expiry date if applicable)
-- Personal information (name, date of birth, address, nationality)
-- Document structure and mandatory fields
-- Consistency of information
-
-Respond briefly (2-3 sentences maximum) with:
-1. VALID or INVALID determination
-2. Key reason(s) for your assessment
-3. Any missing or suspicious elements if invalid
-
-Be concise and professional."""
-
-        elif doc_type_lower in ["driver_license", "driving_license"]:
-            system_prompt = """You are a document verification expert specializing in driver's license validation.
-Analyze the extracted text from a driver's license and verify its authenticity.
-
-Check for:
-- Valid license number format
-- Issuing authority and region
-- Valid dates (issue date, expiry date)
-- Personal information (name, date of birth, address)
-- License categories/classes
-- Document structure and mandatory fields
-
-Respond briefly (2-3 sentences maximum) with:
-1. VALID or INVALID determination
-2. Key reason(s) for your assessment
-3. Any missing or suspicious elements if invalid
-
-Be concise and professional."""
-
-        else:
-            system_prompt = f"""You are a document verification expert.
-Analyze the extracted text from a {req.document_type} document and verify its authenticity.
-
-Check for:
-- Document structure and completeness
-- Presence of mandatory fields
-- Consistency of information
-- Valid dates and formatting
-- Issuing authority information
+- Personal information consistency
+- Any signs of tampering or inconsistency
 
 Respond briefly (2-3 sentences maximum) with:
 1. VALID or INVALID determination
@@ -523,14 +476,14 @@ Respond briefly (2-3 sentences maximum) with:
 
 Be concise and professional."""
         
-        # Step 3: Call LLM for validation
+        # Step 4: Call LLM for validation
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Validate this {req.document_type} document:\n\n{extracted_text[:4000]}"}
+            {"role": "user", "content": f"Validate this {label} document:\n\n{extracted_text[:4000]}"}
         ]
         
         if logger:
-            logger.info(f"[DOC-CHECK] Sending to LLM for validation: {req.document_type}")
+            logger.info(f"[DOC-CHECK] Sending to LLM for validation: {label}")
         
         llm_response = await call_lmstudio_chat(
             messages,
@@ -552,7 +505,7 @@ Be concise and professional."""
                 }
             }
         
-        # Step 4: Determine if document is valid based on LLM response
+        # Step 5: Determine if document is valid based on LLM response
         validation_lower = validation_result.lower()
         is_valid = "valid" in validation_lower and "invalid" not in validation_lower
         

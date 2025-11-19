@@ -14,28 +14,17 @@ Public API endpoint for automated document verification. Accepts identity docume
 
 ### Headers
 ```
-Content-Type: application/json
+Content-Type: multipart/form-data
 ```
 
-### Request Body
-
-```json
-{
-  "document_data": "base64_encoded_document_string",
-  "document_type": "passport",
-  "mime_type": "application/pdf",
-  "filename": "passport.pdf"
-}
-```
-
-### Parameters
+### Form Data Fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `document_data` | string | Yes | Base64-encoded document content |
-| `document_type` | string | Yes | Type of document: `passport`, `cin`, `id_card`, `national_id`, `driver_license`, `driving_license` |
-| `mime_type` | string | No | Document MIME type. Default: `application/pdf`<br>Supported: `application/pdf`, `image/png`, `image/jpeg`, `image/jpg` |
-| `filename` | string | No | Original filename (for logging). Default: `document` |
+| `file` | File | Yes | Document file (PDF or image: PNG, JPEG, JPG) |
+| `label` | String | Yes | What the document is (e.g., "passport", "cin", "driver_license", "id_card") |
+
+**Note**: The external app sends the actual file (PDF or image), and ORCHA handles the base64 conversion internally.
 
 ---
 
@@ -80,29 +69,32 @@ Content-Type: application/json
 ### Processing Flow
 
 1. **Document Reception**
-   - API receives base64-encoded document with metadata
-   - Validates MIME type and document type
+   - External app sends file via multipart/form-data with `file` and `label`
+   - ORCHA receives the file (PDF or image)
+   - Detects MIME type automatically from file content and extension
 
-2. **Text Extraction**
+2. **Internal Conversion**
+   - ORCHA converts file to base64 internally (external app sends raw file)
+   - No need for external apps to handle base64 encoding
+
+3. **Text Extraction**
    - **PDF Documents**: Direct text extraction using PDF parser
-   - **Image Documents**: OCR processing to extract text from image
+   - **Image Documents**: OCR processing to extract text from image (PNG, JPEG, etc.)
    - Validates that text was successfully extracted (minimum 10 characters)
 
-3. **Specialized Validation**
-   - System selects validation prompt based on `document_type`
-   - Each document type has specialized criteria:
-     - **Passport**: Checks passport number, MRZ, dates, issuing country
-     - **CIN/ID Card**: Checks ID number, issuing authority, personal info
-     - **Driver's License**: Checks license number, categories, validity dates
+4. **Dynamic Validation Prompt**
+   - System builds validation prompt using the `label` provided
+   - The `label` is injected into the prompt to guide the AI
+   - Example: If label is "passport", prompt asks AI to verify passport-specific fields
 
-4. **LLM Analysis**
-   - Extracted text sent to AI model with specialized prompt
+5. **LLM Analysis**
+   - Extracted text sent to AI model with label-based specialized prompt
    - Model analyzes document structure, completeness, and consistency
    - Returns brief validation result (2-3 sentences max)
 
-5. **Response Generation**
+6. **Response Generation**
    - Determines `success` status based on LLM response
-   - Returns standardized response format
+   - Returns standardized response format with validation details
 
 ---
 
@@ -112,13 +104,8 @@ Content-Type: application/json
 
 ```bash
 curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "document_data": "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC...",
-    "document_type": "passport",
-    "mime_type": "application/pdf",
-    "filename": "passport.pdf"
-  }'
+  -F "file=@passport.pdf" \
+  -F "label=passport"
 ```
 
 **Response:**
@@ -136,13 +123,8 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 
 ```bash
 curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "document_data": "iVBORw0KGgoAAAANSUhEUgAA...",
-    "document_type": "cin",
-    "mime_type": "image/jpeg",
-    "filename": "cin.jpg"
-  }'
+  -F "file=@cin.jpg" \
+  -F "label=cin"
 ```
 
 **Response:**
@@ -160,13 +142,8 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 
 ```bash
 curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "document_data": "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC...",
-    "document_type": "passport",
-    "mime_type": "application/pdf",
-    "filename": "suspicious_passport.pdf"
-  }'
+  -F "file=@suspicious_passport.pdf" \
+  -F "label=passport"
 ```
 
 **Response:**
@@ -182,13 +159,20 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 
 ---
 
-## Supported Document Types
+## Supported Document Types (via label)
 
-| Type | Value | Description |
-|------|-------|-------------|
-| Passport | `passport` | International passports |
-| National ID | `cin`, `id_card`, `national_id` | National identity cards |
-| Driver's License | `driver_license`, `driving_license` | Driving permits |
+You can use any label describing the document. Common examples:
+
+| Label Example | Description |
+|---------------|-------------|
+| `passport` | International passports |
+| `cin` | Carte d'Identite Nationale |
+| `id_card` | National identity cards |
+| `driver_license` | Driving permits |
+| `residence_permit` | Residence permits |
+| `birth_certificate` | Birth certificates |
+
+**Note**: The `label` is used directly in the validation prompt, so be descriptive!
 
 ---
 
@@ -239,32 +223,18 @@ curl -X POST https://aura.vaeerdia.com/api/v1/orcha/doc-check \
 
 ## Integration Guide
 
-### JavaScript/Node.js
+### JavaScript/Node.js (Browser)
 
 ```javascript
-const fs = require('fs');
-
-async function verifyDocument(filePath, documentType) {
-  // Read file and convert to base64
-  const fileBuffer = fs.readFileSync(filePath);
-  const base64Doc = fileBuffer.toString('base64');
-  
-  // Determine MIME type
-  const mimeType = filePath.endsWith('.pdf') 
-    ? 'application/pdf' 
-    : 'image/jpeg';
+async function verifyDocument(file, label) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('label', label);
   
   const response = await fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      document_data: base64Doc,
-      document_type: documentType,
-      mime_type: mimeType,
-      filename: filePath.split('/').pop()
-    })
+    body: formData
+    // Note: Don't set Content-Type header - browser sets it automatically with boundary
   });
   
   const result = await response.json();
@@ -278,6 +248,46 @@ async function verifyDocument(filePath, documentType) {
   return result;
 }
 
+// Usage with file input
+document.getElementById('uploadBtn').addEventListener('click', async () => {
+  const fileInput = document.getElementById('fileInput');
+  const label = document.getElementById('labelInput').value;
+  
+  if (fileInput.files.length > 0) {
+    const result = await verifyDocument(fileInput.files[0], label);
+    console.log(result);
+  }
+});
+```
+
+### JavaScript/Node.js (Server)
+
+```javascript
+const FormData = require('form-data');
+const fs = require('fs');
+const fetch = require('node-fetch');
+
+async function verifyDocument(filePath, label) {
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(filePath));
+  formData.append('label', label);
+  
+  const response = await fetch('https://aura.vaeerdia.com/api/v1/orcha/doc-check', {
+    method: 'POST',
+    body: formData
+  });
+  
+  const result = await response.json();
+  
+  if (result.success) {
+    console.log('Valid:', result.data.Res_validation);
+  } else {
+    console.log('Invalid:', result.data.Res_validation);
+  }
+  
+  return result;
+}
+
 // Usage
 verifyDocument('./passport.pdf', 'passport');
 ```
@@ -285,26 +295,18 @@ verifyDocument('./passport.pdf', 'passport');
 ### Python
 
 ```python
-import base64
 import requests
 
-def verify_document(file_path, document_type):
-    # Read and encode file
+def verify_document(file_path, label):
     with open(file_path, 'rb') as f:
-        document_data = base64.b64encode(f.read()).decode('utf-8')
-    
-    # Determine MIME type
-    mime_type = 'application/pdf' if file_path.endswith('.pdf') else 'image/jpeg'
-    
-    response = requests.post(
-        'https://aura.vaeerdia.com/api/v1/orcha/doc-check',
-        json={
-            'document_data': document_data,
-            'document_type': document_type,
-            'mime_type': mime_type,
-            'filename': file_path.split('/')[-1]
-        }
-    )
+        files = {'file': f}
+        data = {'label': label}
+        
+        response = requests.post(
+            'https://aura.vaeerdia.com/api/v1/orcha/doc-check',
+            files=files,
+            data=data
+        )
     
     result = response.json()
     
@@ -317,6 +319,40 @@ def verify_document(file_path, document_type):
 
 # Usage
 verify_document('./passport.pdf', 'passport')
+verify_document('./cin.jpg', 'cin')
+```
+
+### PHP
+
+```php
+<?php
+$file_path = './passport.pdf';
+$label = 'passport';
+
+$curl = curl_init();
+
+$file = new CURLFile($file_path);
+$post_data = array(
+    'file' => $file,
+    'label' => $label
+);
+
+curl_setopt($curl, CURLOPT_URL, 'https://aura.vaeerdia.com/api/v1/orcha/doc-check');
+curl_setopt($curl, CURLOPT_POST, true);
+curl_setopt($curl, CURLOPT_POSTFIELDS, $post_data);
+curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+
+$response = curl_exec($curl);
+$result = json_decode($response, true);
+
+if ($result['success']) {
+    echo "Valid: " . $result['data']['Res_validation'];
+} else {
+    echo "Invalid: " . $result['data']['Res_validation'];
+}
+
+curl_close($curl);
+?>
 ```
 
 ---
@@ -325,9 +361,11 @@ verify_document('./passport.pdf', 'passport')
 
 1. **File Size**: Keep documents under 10MB for optimal processing
 2. **Image Quality**: For images, ensure minimum 300 DPI for accurate OCR
-3. **Document Type**: Always specify the correct `document_type` for accurate validation
-4. **Error Handling**: Always check the `success` field before processing results
-5. **Retry Logic**: Implement retry with exponential backoff for network errors
+3. **Label Field**: Use descriptive labels (e.g., "passport", "cin", "driver_license") - the label guides AI validation
+4. **File Format**: Send raw files (PDF or images) - ORCHA handles base64 conversion internally
+5. **Error Handling**: Always check the `success` field before processing results
+6. **Retry Logic**: Implement retry with exponential backoff for network errors
+7. **Content-Type**: Use `multipart/form-data` (automatically set when using FormData)
 
 ---
 
