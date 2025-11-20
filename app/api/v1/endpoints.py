@@ -570,10 +570,17 @@ Be concise and professional.
         
         # Step 5: Determine if document is valid based on LLM response
         validation_lower = validation_result.lower()
-        is_valid = "valid" in validation_lower and "invalid" not in validation_lower
-        # Also check French keywords
-        if not is_valid and lang == "fr":
-            is_valid = "valide" in validation_lower and "invalide" not in validation_lower
+        
+        # Check for invalid keywords first (more specific)
+        # Check both English and French keywords regardless of lang setting
+        if "invalid" in validation_lower or "invalide" in validation_lower:
+            is_valid = False
+        # Only if no invalid markers, check for valid keywords
+        elif "valid" in validation_lower or "valide" in validation_lower:
+            is_valid = True
+        else:
+            # If neither found, assume invalid for safety
+            is_valid = False
         
         if logger:
             logger.info(f"[DOC-CHECK] Validation complete: {'VALID' if is_valid else 'INVALID'}")
