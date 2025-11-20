@@ -1,4 +1,4 @@
-﻿# Chatbot Integration Process for ORCHA within OpenCare
+# Chatbot Integration Process for ORCHA within OpenCare
 
 ## 1. Scope Preparation
 - **Objective**: Enhance OpenCare (health/insurance software) with an intelligent chatbot powered by ORCHA.

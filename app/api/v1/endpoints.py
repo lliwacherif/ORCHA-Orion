@@ -418,6 +418,10 @@ async def orcha_doc_check(
     from app.services.ocr_client import extract_text_from_image
     from app.services.chatbot_client import call_lmstudio_chat
     
+    SUPPORTED_OCR_LANGUAGES = {
+        "en", "fr", "ar", "ch", "es", "de", "it", "pt", "ru", "ja", "ko"
+    }
+    
     logger = getattr(request.state, "logger", None) if request else None
     
     # Normalize language parameter
@@ -452,10 +456,15 @@ async def orcha_doc_check(
             # Image: Use OCR
             if logger:
                 logger.info(f"[DOC-CHECK] Extracting text from image via OCR: {filename}")
+            
+            ocr_language = lang if lang in SUPPORTED_OCR_LANGUAGES else "en"
+            if ocr_language != lang and logger:
+                logger.warning(f"[DOC-CHECK] Unsupported OCR language '{lang}', falling back to '{ocr_language}'")
+            
             ocr_result = await extract_text_from_image(
                 image_data=document_data_base64,
                 filename=filename,
-                language="auto"
+                language=ocr_language
             )
             
             if ocr_result.get("success"):

@@ -1,4 +1,4 @@
-﻿# ORCHA Document Verification Workflow
+# ORCHA Document Verification Workflow
 
 ## Overview
 This guide explains how ORCHA processes user-submitted documents (PDF, DOC, images) to verify identity or financial data, such as IBAN, passports, licenses, or insurance vouchers. The flow combines ingestion, OCR, parsing, validation, and reporting to determine document legitimacy.
@@ -95,4 +95,4 @@ This guide explains how ORCHA processes user-submitted documents (PDF, DOC, imag
 ---
 
 ## Summary
-By combining OCR, structured validation, and LLM reasoning, ORCHA evaluates uploaded documents for authenticity and consistency. Each stageâ€”from ingestion to responseâ€”ensures that users receive clear guidance about whether their files are legitimate and what issues (if any) were detected.
+By combining OCR, structured validation, and LLM reasoning, ORCHA evaluates uploaded documents for authenticity and consistency. Each stage—from ingestion to response—ensures that users receive clear guidance about whether their files are legitimate and what issues (if any) were detected.
