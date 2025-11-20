@@ -389,6 +389,7 @@ async def orcha_doc_check_options():
 async def orcha_doc_check(
     file: UploadFile = File(..., description="Document file (PDF or image)"),
     label: str = Form(..., description="Document type label (e.g., passport, cin, driver_license)"),
+    lang: str = Form(default="fr", description="Response language: 'en' or 'fr' (default: fr)"),
     request: Request = None
 ):
     """
@@ -401,11 +402,13 @@ async def orcha_doc_check(
     Form Data:
     - file: Document file (PDF or image)
     - label: What the document is (e.g., "passport", "cin", "driver_license")
+    - lang: Response language - "en" or "fr" (default: "fr")
     
     Response:
     {
-        "success": true,
-        "message": "document valide",
+        "success": true,  // API execution status (true = worked, false = error)
+        "valid": true,    // Document validity (true = valid, false = invalid)
+        "message": "API request processed successfully",
         "data": {
             "Res_validation": "Detailed validation result..."
         }
@@ -417,6 +420,11 @@ async def orcha_doc_check(
     
     logger = getattr(request.state, "logger", None) if request else None
     
+    # Normalize language parameter
+    lang = lang.lower() if lang else "fr"
+    if lang not in ["en", "fr"]:
+        lang = "fr"  # Default to French if invalid
+    
     try:
         # Step 1: Read file and detect MIME type
         file_content = await file.read()
@@ -424,7 +432,7 @@ async def orcha_doc_check(
         content_type = file.content_type or "application/octet-stream"
         
         if logger:
-            logger.info(f"[DOC-CHECK] Received file: {filename}, type: {content_type}, label: {label}")
+            logger.info(f"[DOC-CHECK] Received file: {filename}, type: {content_type}, label: {label}, lang: {lang}")
         
         # Convert to base64 for processing
         document_data_base64 = base64.b64encode(file_content).decode('utf-8')
@@ -455,35 +463,50 @@ async def orcha_doc_check(
                 if logger:
                     logger.info(f"[DOC-CHECK] OCR extracted {len(extracted_text)} characters")
             else:
+                # API failed (OCR error) - return success=False
+                error_msg = f"Unable to extract text from image: {ocr_result.get('message', 'OCR failed')}"
                 return _create_cors_response({
                     "success": False,
-                    "message": "document non valide",
+                    "valid": False,
+                    "message": "invalid document" if lang == "en" else "document non valide",
                     "data": {
-                        "Res_validation": f"Unable to extract text from image: {ocr_result.get('message', 'OCR failed')}"
+                        "Res_validation": error_msg
                     }
                 })
         else:
+            # Unsupported file type - API worked but file is invalid
+            error_msg = f"Unsupported document type: {content_type}. Please upload PDF or image files."
             return _create_cors_response({
                 "success": False,
-                "message": "document non valide",
+                "valid": False,
+                "message": "invalid document" if lang == "en" else "document non valide",
                 "data": {
-                    "Res_validation": f"Unsupported document type: {content_type}. Please upload PDF or image files."
+                    "Res_validation": error_msg
                 }
             })
         
         if not extracted_text or len(extracted_text) < 10:
+            # Document is unreadable - API worked but document is invalid
+            error_msg = "Document appears to be empty or unreadable. No text could be extracted." if lang == "en" else "Le document semble vide ou illisible. Aucun texte n'a pu être extrait."
             return _create_cors_response({
-                "success": False,
-                "message": "document non valide",
+                "success": True,  # API worked
+                "valid": False,   # But document is invalid
+                "message": "invalid document" if lang == "en" else "document non valide",
                 "data": {
-                    "Res_validation": "Document appears to be empty or unreadable. No text could be extracted."
+                    "Res_validation": error_msg
                 }
             })
         
-        # Step 3: Build specialized validation prompt based on label
+        # Step 3: Build specialized validation prompt based on label and language
         label_lower = label.lower()
         
-        # Build prompt with label injected
+        # Language instruction for the model
+        if lang == "en":
+            language_instruction = "Respond in English."
+        else:
+            language_instruction = "Répondez en français."
+        
+        # Build prompt with label injected and language preference
         system_prompt = f"""You are a document verification expert specializing in {label} validation.
 Analyze the extracted text from a {label} document and verify its authenticity.
 
@@ -501,7 +524,8 @@ Respond briefly (2-3 sentences maximum) with:
 2. Key reason(s) for your assessment
 3. Any missing or suspicious elements if invalid
 
-Be concise and professional."""
+Be concise and professional.
+{language_instruction}"""
         
         # Step 4: Call LLM for validation
         messages = [
@@ -510,7 +534,7 @@ Be concise and professional."""
         ]
         
         if logger:
-            logger.info(f"[DOC-CHECK] Sending to LLM for validation: {label}")
+            logger.info(f"[DOC-CHECK] Sending to LLM for validation: {label} (language: {lang})")
         
         llm_response = await call_lmstudio_chat(
             messages,
@@ -524,24 +548,32 @@ Be concise and professional."""
             validation_result = llm_response["choices"][0].get("message", {}).get("content", "")
         
         if not validation_result:
+            # LLM service unavailable - API failed
+            error_msg = "Validation service unavailable. Please try again." if lang == "en" else "Service de validation indisponible. Veuillez réessayer."
             return _create_cors_response({
                 "success": False,
-                "message": "document non valide",
+                "valid": False,
+                "message": "invalid document" if lang == "en" else "document non valide",
                 "data": {
-                    "Res_validation": "Validation service unavailable. Please try again."
+                    "Res_validation": error_msg
                 }
             })
         
         # Step 5: Determine if document is valid based on LLM response
         validation_lower = validation_result.lower()
         is_valid = "valid" in validation_lower and "invalid" not in validation_lower
+        # Also check French keywords
+        if not is_valid and lang == "fr":
+            is_valid = "valide" in validation_lower and "invalide" not in validation_lower
         
         if logger:
             logger.info(f"[DOC-CHECK] Validation complete: {'VALID' if is_valid else 'INVALID'}")
         
+        # API worked successfully - return result with document validity
         return _create_cors_response({
-            "success": is_valid,
-            "message": "document valide" if is_valid else "document non valide",
+            "success": True,  # API worked
+            "valid": is_valid,  # Document validity
+            "message": ("valid document" if is_valid else "invalid document") if lang == "en" else ("document valide" if is_valid else "document non valide"),
             "data": {
                 "Res_validation": validation_result
             }
@@ -552,9 +584,11 @@ Be concise and professional."""
         if logger:
             logger.error(f"[DOC-CHECK] Error: {error_msg}")
         
+        # API failed due to exception
         return _create_cors_response({
             "success": False,
-            "message": "document non valide",
+            "valid": False,
+            "message": "invalid document" if lang == "en" else "document non valide",
             "data": {
                 "Res_validation": f"Error during validation: {error_msg}"
             }
