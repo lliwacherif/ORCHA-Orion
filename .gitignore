@@ -1,4 +1,7 @@
 .venv/
+venv/
+env/
+envold312/
 __pycache__/
 *.pyc
 .env
