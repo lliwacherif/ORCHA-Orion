@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Google Custom Search API
     GOOGLE_API_KEY: str = "your-google-api-key-here"
     GOOGLE_SEARCH_ENGINE_ID: str = "your-search-engine-id-here"
+    
+    # Gemini Pro Mode API (Google AI)
+    # TODO: Override this in .env for production
+    GEMINI_API_KEY: str = "AIzaSyCR1TlKBb-3saTcHCVKMoBkiCyUkngJ4WE"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     # External widget defaults
     DEFAULT_WIDGET_USER_ID: int = 1

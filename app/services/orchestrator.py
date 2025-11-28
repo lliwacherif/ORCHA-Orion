@@ -142,10 +142,11 @@ def has_vision_attachments(attachments: List) -> tuple[bool, List[Dict[str, Any]
 
 async def handle_chat_request(payload: Dict[str, Any], request):
     """
-    payload: { user_id, tenant_id, message, attachments[], use_rag, conversation_id }
+    payload: { user_id, tenant_id, message, attachments[], use_rag, use_pro_mode, conversation_id }
     request: FastAPI Request for trace/logging access
     
     Smart flow:
+    - If use_pro_mode=True -> Route to Bytez.com cloud LLM (Pro Mode)
     - If attachments with base64 data (PDFs) -> Extract text and add to prompt
     - If attachments with URI -> OCR + Ingest to RAG + Answer with RAG context
     - If use_rag=True -> Query RAG + Answer with context
@@ -157,6 +158,7 @@ async def handle_chat_request(payload: Dict[str, Any], request):
     message = payload.get("message", "")
     attachments = payload.get("attachments") or []
     use_rag = payload.get("use_rag", False)
+    use_pro_mode = payload.get("use_pro_mode", False)  # New: Use Bytez.com API
     conversation_history = payload.get("conversation_history") or []  # Last N messages for context
     conversation_id = payload.get("conversation_id")  # Optional: existing conversation
     tenant_id = payload.get("tenant_id")
@@ -468,10 +470,119 @@ Please answer the user's question based on the document content above."""
         # No PDF attached, use original message
         enhanced_message = message
     
-    # 5) Route to appropriate model based on attachment type
+    # 5) Route to appropriate model based on use_pro_mode and attachment type
     try:
+        # Check if Pro Mode is enabled -> Route to Bytez.com API
+        if use_pro_mode:
+            if logger:
+                logger.info(f"🚀 Pro Mode enabled - routing to Google Gemini API")
+            
+            # Pro Mode doesn't support vision yet - inform user if images are attached
+            if has_vision:
+                if logger:
+                    logger.warning("⚠️ Pro Mode doesn't support image analysis - falling back to local model")
+                return {
+                    "status": "error",
+                    "error": "Pro Mode doesn't support image analysis yet. Please disable Pro Mode for image-based queries.",
+                    "message": "Pro Mode doesn't support image analysis yet. Please disable Pro Mode for image-based queries.",
+                    "conversation_id": conversation.id if conversation else None
+                }
+            
+            # Import Gemini service for Pro Mode
+            from app.services.gemini_service import call_gemini_chat, GeminiRateLimitError, GeminiServiceError, GeminiSafetyError
+            
+            # Add current user message (text-only for Bytez)
+            messages.append({"role": "user", "content": enhanced_message})
+            
+            try:
+                # Call Gemini API
+                if logger:
+                    logger.info(f"📡 Calling Gemini API with {len(messages)} messages")
+                
+                resp = await call_gemini_chat(
+                    messages,
+                    max_tokens=2048,
+                    timeout=60
+                )
+                
+                if logger:
+                    logger.info(f"✅ Gemini API response received")
+            
+            except GeminiRateLimitError as rate_error:
+                # Rate limit hit - return user-friendly error
+                error_msg = str(rate_error)
+                if logger:
+                    logger.warning(f"⚠️ Gemini rate limit: {error_msg}")
+                
+                # Store error message in database
+                if conversation:
+                    try:
+                        error_message_db = ChatMessage(
+                            conversation_id=conversation.id,
+                            role="assistant",
+                            content=error_msg,
+                            error_message="gemini_rate_limit",
+                            created_at=datetime.utcnow()
+                        )
+                        db_session.add(error_message_db)
+                        conversation.updated_at = datetime.utcnow()
+                        await db_session.commit()
+                    except Exception as db_error:
+                        if logger:
+                            logger.error(f"Failed to store rate limit error: {db_error}")
+                
+                return {
+                    "status": "error",
+                    "error": "pro_mode_busy",
+                    "message": error_msg,
+                    "conversation_id": conversation.id if conversation else None
+                }
+            
+            except GeminiSafetyError as safety_error:
+                # Content blocked by safety filters
+                error_msg = str(safety_error)
+                if logger:
+                    logger.warning(f"⚠️ Gemini safety block: {error_msg}")
+                
+                return {
+                    "status": "error",
+                    "error": "pro_mode_safety",
+                    "message": error_msg,
+                    "conversation_id": conversation.id if conversation else None
+                }
+            
+            except GeminiServiceError as service_error:
+                # Other Gemini service errors
+                error_msg = str(service_error)
+                if logger:
+                    logger.error(f"❌ Gemini service error: {error_msg}")
+                
+                # Store error message in database
+                if conversation:
+                    try:
+                        error_message_db = ChatMessage(
+                            conversation_id=conversation.id,
+                            role="assistant",
+                            content=f"Pro Mode error: {error_msg}",
+                            error_message="gemini_service_error",
+                            created_at=datetime.utcnow()
+                        )
+                        db_session.add(error_message_db)
+                        conversation.updated_at = datetime.utcnow()
+                        await db_session.commit()
+                    except Exception as db_error:
+                        if logger:
+                            logger.error(f"Failed to store service error: {db_error}")
+                
+                return {
+                    "status": "error",
+                    "error": "pro_mode_error",
+                    "message": f"Pro Mode error: {error_msg}",
+                    "conversation_id": conversation.id if conversation else None
+                }
+        
         # Check if we have vision attachments -> Route to Gemma in LM Studio
-        if has_vision:
+        elif has_vision:
             if logger:
                 logger.info(f"🎨 Routing to Gemma model in LM Studio with {len(vision_images)} image(s)")
                 logger.info(f"🎨 Model: {settings.GEMMA_MODEL}")
@@ -533,16 +644,21 @@ Please answer the user's question based on the document content above."""
                 timeout=settings.LM_TIMEOUT
             )
         
+        # Log appropriate success message based on which service was used
         if logger:
-            logger.info(f"LM Studio response received successfully")
+            if use_pro_mode:
+                logger.info(f"✅ Pro Mode (Gemini) response received successfully")
+            else:
+                logger.info(f"✅ LM Studio response received successfully")
             logger.debug(f"Response keys: {resp.keys() if isinstance(resp, dict) else 'Not a dict'}")
         
         # Validate response structure
+        model_name = "Pro Mode (Gemini)" if use_pro_mode else "LM Studio"
         if not isinstance(resp, dict):
-            raise ValueError(f"LM Studio returned non-dict response: {type(resp)}")
+            raise ValueError(f"{model_name} returned non-dict response: {type(resp)}")
         
         if "choices" not in resp:
-            raise ValueError(f"LM Studio response missing 'choices' field. Keys: {list(resp.keys())}")
+            raise ValueError(f"{model_name} response missing 'choices' field. Keys: {list(resp.keys())}")
         
         # Extract the assistant's message for clean React consumption
         assistant_message = ""
@@ -626,7 +742,8 @@ Please answer the user's question based on the document content above."""
             "conversation_id": conversation.id,  # Return conversation ID for frontend
             "contexts": contexts if contexts else [],
             "model_response": resp,  # Full response for debugging
-            "token_usage": token_usage_info  # Add token tracking info
+            "token_usage": token_usage_info,  # Add token tracking info
+            "pro_mode_used": use_pro_mode  # Indicate if Pro Mode was used
         }
         
         # Add attachment info if any were processed

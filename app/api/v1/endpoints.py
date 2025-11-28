@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     message: str
     attachments: Optional[List[Attachment]] = Field(default_factory=list)
     use_rag: Optional[bool] = False
+    use_pro_mode: Optional[bool] = False  # New: Use Bytez.com API instead of local LLM
     conversation_history: Optional[List[Message]] = Field(default_factory=list)
     conversation_id: Optional[int] = None  # New: Link to existing conversation
 
@@ -62,6 +63,10 @@ class ChatV2Request(BaseModel):
     use_rag: Optional[bool] = Field(
         default=False,
         description="Set true to force Retrieval-Augmented responses."
+    )
+    use_pro_mode: Optional[bool] = Field(
+        default=False,
+        description="Set true to use Bytez.com cloud LLM (Pro Mode) instead of local model."
     )
 
 class OCRRequest(BaseModel):
@@ -255,6 +260,7 @@ async def orcha_chat_v2(req: ChatV2Request, request: Request, db: AsyncSession =
         "message": req.text,
         "attachments": [],
         "use_rag": req.use_rag,
+        "use_pro_mode": req.use_pro_mode,
         "conversation_history": [],
         "conversation_id": req.conversation_id,
     }
