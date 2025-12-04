@@ -544,6 +544,23 @@ Please answer the user's question based on the document content above."""
                 if logger:
                     logger.warning(f"⚠️ Gemini safety block: {error_msg}")
                 
+                # Store error message in database so it appears in chat window
+                if conversation:
+                    try:
+                        error_message_db = ChatMessage(
+                            conversation_id=conversation.id,
+                            role="assistant",
+                            content=error_msg,
+                            error_message="gemini_safety_block",
+                            created_at=datetime.utcnow()
+                        )
+                        db_session.add(error_message_db)
+                        conversation.updated_at = datetime.utcnow()
+                        await db_session.commit()
+                    except Exception as db_error:
+                        if logger:
+                            logger.error(f"Failed to store safety error: {db_error}")
+                
                 return {
                     "status": "error",
                     "error": "pro_mode_safety",

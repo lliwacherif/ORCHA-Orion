@@ -42,7 +42,7 @@ class ChatRequest(BaseModel):
     message: str
     attachments: Optional[List[Attachment]] = Field(default_factory=list)
     use_rag: Optional[bool] = False
-    use_pro_mode: Optional[bool] = False  # New: Use Bytez.com API instead of local LLM
+    use_pro_mode: Optional[bool] = False  # Enable AURA Pro (Gemini 2.5)
     conversation_history: Optional[List[Message]] = Field(default_factory=list)
     conversation_id: Optional[int] = None  # New: Link to existing conversation
 
@@ -63,10 +63,6 @@ class ChatV2Request(BaseModel):
     use_rag: Optional[bool] = Field(
         default=False,
         description="Set true to force Retrieval-Augmented responses."
-    )
-    use_pro_mode: Optional[bool] = Field(
-        default=False,
-        description="Set true to use Bytez.com cloud LLM (Pro Mode) instead of local model."
     )
 
 class OCRRequest(BaseModel):
@@ -260,7 +256,6 @@ async def orcha_chat_v2(req: ChatV2Request, request: Request, db: AsyncSession =
         "message": req.text,
         "attachments": [],
         "use_rag": req.use_rag,
-        "use_pro_mode": req.use_pro_mode,
         "conversation_history": [],
         "conversation_id": req.conversation_id,
     }
@@ -405,185 +400,199 @@ async def orcha_auto_fill_options():
     
     return Response(status_code=200, headers=headers)
 
-# Helper to build dynamic LLM prompt based on requested fields
-def _build_dynamic_extraction_prompt(fields: List[dict]) -> str:
+# Default empty response structure for auto-fill
+def _get_empty_autofill_response(success: bool = True, message: str = "") -> dict:
+    """Return the standard auto-fill response structure with empty/null data."""
+    return {
+        "success": success,
+        "message": message,
+        "data": {
+            "id": None,
+            "is_vip": 0,
+            "language": "",
+            "fid": None,
+            "org_id": None,
+            "is_group": 0,
+            "employer_id": None,
+            "fullname": "",
+            "gender": None,
+            "firstname": "",
+            "lastname": "",
+            "maidenname": "",
+            "birth_date": None,
+            "birth_place": "",
+            "birth_country_code": "",
+            "nationality": "",
+            "nationality_2": None,
+            "nationality_3": None,
+            "email": None,
+            "tel_1": "",
+            "tel_2": "",
+            "def_address_id": None,
+            "def_bank_account_id": None,
+            "adr": "",
+            "adr_2": "",
+            "zipcode": "",
+            "city": "",
+            "country_code": "",
+            "bank_name": None,
+            "bank_iban": "",
+            "bank_bic": "",
+            "lifecycle": None,
+            "is_hr": 0,
+            "staff_number": "",
+            "created_at": None,
+            "updated_at": None,
+            "created_by": None,
+            "updated_by": None,
+            "deleted_at": None,
+            "origin": None,
+            "source_id": None,
+            "reference": "",
+            "social_sec_number": "",
+            "citizen_id": None,
+            "family_number": "",
+            "type_account": None,
+            "agency_name": None,
+            "agency_code": None,
+            "bank_country_code": None,
+            "bank_contact": None,
+            "agency_adress": None,
+            "control_key": None,
+            "bank_identifier_code": None,
+            "bank_branch_code": None,
+            "account_number": None,
+            "rib_key": None,
+            "rib": None,
+            "bank_country": None,
+            "bank_start_date": None,
+            "bank_end_date": None,
+            "locked_by": None,
+            "locked_at": None,
+            "identity_doc": None,
+            "batchId": None,
+            "childrens_count_by_type": [],
+            "addresses": [],
+            "banks": [],
+            "moral": None,
+            "childrens": [],
+            "update": {
+                "by": "",
+                "at": None
+            }
+        }
+    }
+
+def _parse_llm_autofill_response(llm_response: str) -> dict:
     """
-    Build a dynamic system prompt based on the fields requested by the external app.
+    Parse LLM response to extract gender, firstname, lastname, birth_date.
     
-    Args:
-        fields: List of dicts like [{"field_name": "firstname", "field_type": "string"}, ...]
+    Expected format: "response is: {gender_value}, {firstname_value}, {lastname_value}, {birth_date_value}"
+    Or: "Document seems to be unvalid"
     
     Returns:
-        System prompt string for the LLM
+        dict with extracted values or None if invalid
     """
-    if not fields:
-        # Fallback if no fields provided
-        return """Analyze the provided document text and extract any available information.
-Return the result as a valid JSON object."""
-    
-    # Extract field names for the prompt
-    field_names = [f.get("field_name", "") for f in fields if f.get("field_name")]
-    field_names_str = ", ".join(field_names)
-    
-    # Build the dynamic prompt
-    system_prompt = f"""Analyze the provided document text. Your task is to extract the following specific fields: {field_names_str}.
-
-Rules:
-- Do not validate if this is a real ID or Passport. Just extract the text that matches the requested fields.
-- Return the result strictly as a valid JSON object.
-- If a field is not found, set its value to null.
-- If the document is completely unreadable or contains no text, return an empty JSON object {{}}.
-
-Example output format:
-{{
-    "{field_names[0] if field_names else 'field1'}": "extracted_value_or_null",
-    "{field_names[1] if len(field_names) > 1 else 'field2'}": "extracted_value_or_null"
-}}
-
-Only return the JSON object, no additional text."""
-    
-    return system_prompt
-
-def _parse_dynamic_llm_response(llm_response: str, requested_fields: List[dict]) -> dict:
-    """
-    Parse LLM response to extract dynamically requested fields.
-    
-    Args:
-        llm_response: Raw LLM response (should be JSON)
-        requested_fields: List of dicts like [{"field_name": "firstname", "field_type": "string"}, ...]
-    
-    Returns:
-        dict with extracted values or None if completely invalid
-    """
-    import json
     import re
     
     if not llm_response:
         return None
     
-    # Check for explicit failure messages
-    if "unreadable" in llm_response.lower() or "no text" in llm_response.lower():
+    # Check for invalid document response
+    if "document seems to be unvalid" in llm_response.lower():
         return None
     
-    # Try to extract JSON from the response
-    # LLM might wrap JSON in markdown code blocks or add extra text
-    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', llm_response, re.DOTALL)
+    # Try to extract values from the expected format
+    # Pattern: "response is: value1, value2, value3, value4"
+    pattern = r"response\s+is\s*:\s*(.+)"
+    match = re.search(pattern, llm_response, re.IGNORECASE)
     
-    if not json_match:
-        # No JSON found in response
+    if not match:
         return None
     
-    json_str = json_match.group(0)
+    values_str = match.group(1).strip()
     
-    try:
-        parsed_data = json.loads(json_str)
-        
-        # Validate it's a dictionary
-        if not isinstance(parsed_data, dict):
-            return None
-        
-        # If empty dict, it means document was unreadable
-        if not parsed_data:
-            return None
-        
-        # Ensure all requested fields are present (even if null)
-        result = {}
-        for field_def in requested_fields:
-            field_name = field_def.get("field_name", "")
-            if field_name:
-                # Get value from parsed data, default to None if missing
-                value = parsed_data.get(field_name)
-                
-                # Convert empty strings to None for consistency
-                if value == "":
-                    value = None
-                
-                result[field_name] = value
-        
-        return result
-        
-    except json.JSONDecodeError:
-        # Failed to parse JSON
+    # Split by comma and clean up
+    values = [v.strip() for v in values_str.split(",")]
+    
+    if len(values) < 4:
         return None
+    
+    # Map values to fields
+    gender_raw = values[0].strip().lower()
+    firstname = values[1].strip()
+    lastname = values[2].strip()
+    birth_date = values[3].strip()
+    
+    # Normalize gender to expected format (M/F or null)
+    gender = None
+    if gender_raw in ["m", "male", "homme", "masculin"]:
+        gender = "M"
+    elif gender_raw in ["f", "female", "femme", "féminin", "feminin"]:
+        gender = "F"
+    
+    # Validate birth_date format (should be a date-like string)
+    # Accept various formats: YYYY-MM-DD, DD/MM/YYYY, etc.
+    if birth_date and birth_date.lower() in ["n/a", "na", "none", "null", ""]:
+        birth_date = None
+    
+    return {
+        "gender": gender,
+        "firstname": firstname if firstname and firstname.lower() not in ["n/a", "na", "none", "null"] else "",
+        "lastname": lastname if lastname and lastname.lower() not in ["n/a", "na", "none", "null"] else "",
+        "birth_date": birth_date
+    }
 
 @router.put("/orcha/auto-fill")
 async def orcha_auto_fill(
-    file: UploadFile = File(..., description="Document file (PDF or image PNG/JPG)"),
-    fields: str = Form(..., description="JSON string defining fields to extract, e.g. [{\"field_name\": \"firstname\", \"field_type\": \"string\"}, ...]"),
+    file: UploadFile = File(..., description="ID document file (PDF or image PNG/JPG)"),
     request: Request = None
 ):
     """
-    Dynamic document data extraction endpoint for external applications.
-    No authentication required - designed for partner integrations.
+    Public endpoint to scan ID documents (ID Card or Passport) and extract personal information.
+    No authentication required - designed for external application integrations.
     
-    Accepts documents via multipart/form-data and extracts specified fields dynamically.
+    Accepts documents via multipart/form-data and extracts:
+    - gender
+    - firstname
+    - lastname
+    - birth_date
     
     Form Data:
     - file: Document file (PDF or image PNG/JPG)
-    - fields: JSON string or list defining which fields to extract
-              Example: [{"field_name": "firstname", "field_type": "string"}, {"field_name": "birth_date", "field_type": "date"}]
     
     Processing Flow:
-    - PDF files: Text extracted and sent to LLM for analysis
-    - Image files: OCR first, then text sent to LLM
-    - LLM extracts only the requested fields (no strict document validation)
+    - PDF files: Converted to Base64 and sent directly to the LLM for analysis
+    - Image files: Processed through OCR first, then the extracted text is sent to LLM
     
     Response:
     {
         "success": true,
-        "message": "success" or "invalid doc",
+        "message": "",
         "data": {
+            "gender": "M" or "F",
             "firstname": "John",
-            "birth_date": "1990-01-15"
-            // Only requested fields included
+            "lastname": "Doe",
+            "birth_date": "1990-01-15",
+            ... (other fields as null/empty)
         }
     }
     """
     from app.utils.pdf_utils import extract_pdf_text
     from app.services.ocr_client import extract_text_from_image
     from app.services.chatbot_client import call_lmstudio_chat
-    import json
     
     logger = getattr(request.state, "logger", None) if request else None
     
+    # LLM System Prompt for ID document extraction
+    LLM_SYSTEM_PROMPT = """Take this content of a document, analyse it and extract from it these 4 things only: "gender", "firstname", "lastname", "birth_date".
+
+If valid, answer back in this specific format: "response is: {gender_value}, {firstname_value}, {lastname_value}, {birth_date_value}"
+
+If you find nothing or the document is unclear, answer exactly: "Document seems to be unvalid\""""
+    
     try:
-        # Step 1: Parse fields parameter
-        try:
-            # Handle both JSON string and already-parsed list
-            if isinstance(fields, str):
-                fields_list = json.loads(fields)
-            else:
-                fields_list = fields
-            
-            # Validate fields structure
-            if not isinstance(fields_list, list):
-                raise ValueError("fields must be a list")
-            
-            if not fields_list:
-                raise ValueError("fields list cannot be empty")
-            
-            # Validate each field has required keys
-            for field in fields_list:
-                if not isinstance(field, dict):
-                    raise ValueError("Each field must be a dictionary")
-                if "field_name" not in field:
-                    raise ValueError("Each field must have 'field_name'")
-            
-            if logger:
-                field_names = [f.get("field_name") for f in fields_list]
-                logger.info(f"[AUTO-FILL] Requested fields: {', '.join(field_names)}")
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            error_msg = f"Invalid fields parameter: {str(e)}"
-            if logger:
-                logger.error(f"[AUTO-FILL] {error_msg}")
-            return _create_cors_response({
-                "success": False,
-                "message": error_msg,
-                "data": {}
-            })
-        
-        # Step 2: Read file and detect MIME type
+        # Step 1: Read file and detect MIME type
         file_content = await file.read()
         filename = file.filename or "document"
         content_type = file.content_type or "application/octet-stream"
@@ -594,7 +603,7 @@ async def orcha_auto_fill(
         # Convert to base64 for processing
         document_data_base64 = base64.b64encode(file_content).decode('utf-8')
         
-        # Step 3: Process based on file type
+        # Step 2: Process based on file type
         content_for_llm = ""
         is_pdf = content_type == "application/pdf" or filename.lower().endswith('.pdf')
         is_image = content_type.startswith("image/") or filename.lower().endswith(('.png', '.jpg', '.jpeg'))
@@ -603,28 +612,22 @@ async def orcha_auto_fill(
             # Unsupported file type
             if logger:
                 logger.warning(f"[AUTO-FILL] Unsupported file type: {content_type}")
-            return _create_cors_response({
-                "success": False,
-                "message": "Unsupported file type. Please upload PDF or image (PNG/JPG).",
-                "data": {}
-            })
+            response = _get_empty_autofill_response(success=False, message="Unsupported file type. Please upload PDF or image (PNG/JPG).")
+            return _create_cors_response(response)
         
         if is_pdf:
-            # PDF: Extract text for LLM analysis
+            # PDF: Send Base64 directly to LLM (for vision processing)
             if logger:
                 logger.info(f"[AUTO-FILL] Processing PDF: {filename}")
             
+            # Extract text from PDF for LLM analysis
             extracted_text = extract_pdf_text(document_data_base64)
             
             if not extracted_text or len(extracted_text) < 10:
                 if logger:
                     logger.warning(f"[AUTO-FILL] PDF appears empty or unreadable: {filename}")
-                # Return empty data with "invalid doc" message
-                return _create_cors_response({
-                    "success": True,
-                    "message": "invalid doc",
-                    "data": {field.get("field_name"): None for field in fields_list}
-                })
+                response = _get_empty_autofill_response(success=False, message="Document seems to be unvalid")
+                return _create_cors_response(response)
             
             content_for_llm = extracted_text
             if logger:
@@ -638,52 +641,41 @@ async def orcha_auto_fill(
             ocr_result = await extract_text_from_image(
                 image_data=document_data_base64,
                 filename=filename,
-                language="en"  # Default to English for documents
+                language="en"  # Default to English for ID documents
             )
             
             if not ocr_result.get("success"):
                 error_msg = ocr_result.get("message", "OCR failed")
                 if logger:
                     logger.error(f"[AUTO-FILL] OCR failed: {error_msg}")
-                # Return empty data with "invalid doc" message
-                return _create_cors_response({
-                    "success": True,
-                    "message": "invalid doc",
-                    "data": {field.get("field_name"): None for field in fields_list}
-                })
+                response = _get_empty_autofill_response(success=False, message="Document seems to be unvalid")
+                return _create_cors_response(response)
             
             extracted_text = ocr_result.get("text", "")
             
             if not extracted_text or len(extracted_text) < 10:
                 if logger:
                     logger.warning(f"[AUTO-FILL] OCR returned insufficient text: {len(extracted_text)} chars")
-                # Return empty data with "invalid doc" message
-                return _create_cors_response({
-                    "success": True,
-                    "message": "invalid doc",
-                    "data": {field.get("field_name"): None for field in fields_list}
-                })
+                response = _get_empty_autofill_response(success=False, message="Document seems to be unvalid")
+                return _create_cors_response(response)
             
             content_for_llm = extracted_text
             if logger:
                 logger.info(f"[AUTO-FILL] OCR extracted {len(extracted_text)} characters")
         
-        # Step 4: Build dynamic LLM prompt based on requested fields
-        system_prompt = _build_dynamic_extraction_prompt(fields_list)
-        
+        # Step 3: Send to LLM for extraction
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
             {"role": "user", "content": f"Document content:\n\n{content_for_llm[:4000]}"}  # Limit to 4000 chars
         ]
         
         if logger:
-            logger.info(f"[AUTO-FILL] Sending to LLM for dynamic field extraction")
+            logger.info(f"[AUTO-FILL] Sending to LLM for extraction")
         
-        # Step 5: Send to LLM for extraction
         llm_response = await call_lmstudio_chat(
             messages,
             model=None,
-            max_tokens=500,  # More tokens for dynamic fields
+            max_tokens=200,  # Brief response expected
             timeout=60
         )
         
@@ -693,47 +685,37 @@ async def orcha_auto_fill(
             llm_text = llm_response["choices"][0].get("message", {}).get("content", "")
         
         if logger:
-            logger.info(f"[AUTO-FILL] LLM response: {llm_text[:300]}")
+            logger.info(f"[AUTO-FILL] LLM response: {llm_text[:200]}")
         
-        # Step 6: Parse LLM response dynamically
-        parsed = _parse_dynamic_llm_response(llm_text, fields_list)
+        # Step 4: Parse LLM response
+        parsed = _parse_llm_autofill_response(llm_text)
         
         if not parsed:
-            # LLM couldn't extract data or document is unreadable
+            # LLM couldn't extract data or returned invalid document
             if logger:
                 logger.warning(f"[AUTO-FILL] Failed to parse LLM response or invalid document")
-            # Return empty data with "invalid doc" message
-            return _create_cors_response({
-                "success": True,
-                "message": "invalid doc",
-                "data": {field.get("field_name"): None for field in fields_list}
-            })
+            response = _get_empty_autofill_response(success=False, message="Document seems to be unvalid")
+            return _create_cors_response(response)
         
-        # Step 7: Build success response with extracted data
-        # Only include requested fields
+        # Step 5: Build success response with extracted data
+        response = _get_empty_autofill_response(success=True, message="")
+        response["data"]["gender"] = parsed["gender"]
+        response["data"]["firstname"] = parsed["firstname"]
+        response["data"]["lastname"] = parsed["lastname"]
+        response["data"]["birth_date"] = parsed["birth_date"]
+        
         if logger:
-            extracted_summary = ", ".join([f"{k}={v}" for k, v in parsed.items()])
-            logger.info(f"[AUTO-FILL] Successfully extracted: {extracted_summary}")
+            logger.info(f"[AUTO-FILL] Successfully extracted: gender={parsed['gender']}, firstname={parsed['firstname']}, lastname={parsed['lastname']}, birth_date={parsed['birth_date']}")
         
-        return _create_cors_response({
-            "success": True,
-            "message": "success",
-            "data": parsed
-        })
+        return _create_cors_response(response)
         
     except Exception as e:
         error_msg = str(e)
         if logger:
             logger.error(f"[AUTO-FILL] Error: {error_msg}")
-            import traceback
-            logger.error(traceback.format_exc())
         
-        # Return error response
-        return _create_cors_response({
-            "success": False,
-            "message": f"Error processing document: {error_msg}",
-            "data": {}
-        })
+        response = _get_empty_autofill_response(success=False, message=f"Error processing document: {error_msg}")
+        return _create_cors_response(response)
 
 @router.put("/orcha/doc-check")
 async def orcha_doc_check(
