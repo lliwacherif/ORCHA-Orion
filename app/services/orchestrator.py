@@ -336,7 +336,7 @@ async def handle_chat_request(payload: Dict[str, Any], request):
             logger.info("🧠 Memory extraction request detected - using unrestricted system prompt")
     else:
         # Use insurance/finance-focused prompt for regular chat
-        system_prompt = "You are AURA, an advanced assistant for insurance and finance. Provide precise, professional insights on insurance, FinTech, risk management, and compliant financial, legal advice. Refuse general topics and redirect to relevant contexts. Stay factual, concise, and analytical."
+        system_prompt = "You are Orion, an advanced assistant for insurance and finance. Provide precise, professional insights on insurance, FinTech, risk management, and compliant financial, legal advice. Refuse general topics and redirect to relevant contexts. Stay factual, concise, and analytical."
     
     messages = [{"role": "system", "content": system_prompt}]
     
@@ -1027,7 +1027,7 @@ async def handle_web_search_request(payload: Dict[str, Any], request):
         await db_session.commit()
         
         # Step 3: Build messages for LLM to refine the search results
-        system_prompt = """You are AURA, an advanced AI assistant. The user has performed a web search, and you have been provided with the search results. Your task is to:
+        system_prompt = """You are Orion, an advanced AI assistant. The user has performed a web search, and you have been provided with the search results. Your task is to:
 1. Analyze the search results carefully
 2. Extract the most relevant and useful information
 3. Present a clear, concise, and well-organized summary to the user

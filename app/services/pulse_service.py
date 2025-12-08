@@ -91,7 +91,7 @@ async def generate_pulse_for_user(user_id: int, db_session: AsyncSession) -> Opt
             
             for msg in messages:
                 if msg.role in ["user", "assistant"]:
-                    role_label = "User" if msg.role == "user" else "AURA"
+                    role_label = "User" if msg.role == "user" else "Orion"
                     # Truncate long messages to avoid token limit
                     content = msg.content[:MAX_MESSAGE_LENGTH]
                     if len(msg.content) > MAX_MESSAGE_LENGTH:
