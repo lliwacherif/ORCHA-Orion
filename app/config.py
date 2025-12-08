@@ -13,10 +13,15 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
 
-    # LM Studio / Chatbot service
-    LMSTUDIO_URL: str = "http://localhost:1234"
-    LMSTUDIO_VISION_MODEL: str = "llava-v1.6-34b"
-    GEMMA_MODEL: str = "google/gemma-3-12b"
+    # Scaleway / OpenAI-compatible API
+    SCALEWAY_API_URL: str = "https://api.scaleway.ai/d067acb3-2897-4c85-a126-957eb6768d0b/v1"
+    SCALEWAY_API_KEY: str = "6b673550-8c7c-4fed-bac4-3e5a85b7860d"
+    SCALEWAY_MODEL: str = "gpt-oss-120b"
+
+    # Deprecated: LM Studio / Chatbot service
+    # LMSTUDIO_URL: str = "http://localhost:1234"
+    # LMSTUDIO_VISION_MODEL: str = "llava-v1.6-34b"
+    # GEMMA_MODEL: str = "google/gemma-3-12b"
 
     # OCR service endpoint (your PaddleOCR wrapper)
     OCR_SERVICE_URL: str = "http://localhost:8001"
@@ -28,6 +33,9 @@ class Settings(BaseSettings):
     LM_TIMEOUT: int = 500
     RAG_TIMEOUT: int = 15
     OCR_TIMEOUT: int = 60
+
+    # Model Generation Settings
+    MAX_TOKENS: int = 2800
 
     # Google Custom Search API
     GOOGLE_API_KEY: str = "your-google-api-key-here"

@@ -336,7 +336,7 @@ async def handle_chat_request(payload: Dict[str, Any], request):
             logger.info("🧠 Memory extraction request detected - using unrestricted system prompt")
     else:
         # Use insurance/finance-focused prompt for regular chat
-        system_prompt = "You are AURA, an advanced assistant for insurance and finance. Provide precise, professional insights on health insurance, FinTech, risk management, and compliant financial advice. Refuse general topics and redirect to relevant contexts. Stay factual, concise, and analytical."
+        system_prompt = "You are AURA, an advanced assistant for insurance and finance. Provide precise, professional insights on insurance, FinTech, risk management, and compliant financial, legal advice. Refuse general topics and redirect to relevant contexts. Stay factual, concise, and analytical."
     
     messages = [{"role": "system", "content": system_prompt}]
     
@@ -501,7 +501,7 @@ Please answer the user's question based on the document content above."""
                 
                 resp = await call_gemini_chat(
                     messages,
-                    max_tokens=2048,
+                    max_tokens=settings.MAX_TOKENS,
                     timeout=60
                 )
                 
@@ -639,7 +639,7 @@ Please answer the user's question based on the document content above."""
             resp = await call_lmstudio_chat(
                 messages, 
                 model=settings.GEMMA_MODEL,  # Use Gemma model for images
-                max_tokens=2048,  # Reasonable limit for multimodal
+                max_tokens=settings.MAX_TOKENS,  # Reasonable limit for multimodal
                 timeout=settings.LM_TIMEOUT
             )
             
@@ -1049,7 +1049,7 @@ Be helpful, accurate, and cite your sources."""
         resp = await call_lmstudio_chat(
             messages,
             model=None,  # Use default model
-            max_tokens=2048,
+            max_tokens=settings.MAX_TOKENS,
             timeout=settings.LM_TIMEOUT
         )
         
