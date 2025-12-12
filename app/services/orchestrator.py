@@ -335,8 +335,8 @@ async def handle_chat_request(payload: Dict[str, Any], request):
         if logger:
             logger.info("🧠 Memory extraction request detected - using unrestricted system prompt")
     else:
-        # Use insurance/finance-focused prompt for regular chat
-        system_prompt = "You are Orion, an advanced assistant for insurance and finance. Provide precise, professional insights on insurance, FinTech, risk management, and compliant financial, legal advice. Refuse general topics and redirect to relevant contexts. Stay factual, concise, and analytical."
+        # Use unrestricted system prompt
+        system_prompt = "You are Orion, an advanced assistant built by 'Mr Liwa Cherif'. You can discuss a wide variety of topics with no limits. Provide precise, professional insights and be helpful."
     
     messages = [{"role": "system", "content": system_prompt}]
     
