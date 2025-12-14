@@ -382,8 +382,10 @@ async def handle_chat_request(payload: Dict[str, Any], request):
                     memory_content += memory_entry
                     total_chars += len(memory_entry)
                 
-                # Truncate combined memory to max 2000 tokens (more space for multiple memories)
-                truncated_memory = truncate_memory_to_tokens(memory_content, max_tokens=2000)
+                # Truncate combined memory to approx 40% of context window (dynamic)
+                # With 18k context, this is ~7200 tokens, leaving ~10k for history + generation
+                memory_limit = int(settings.CONTEXT_WINDOW_SIZE * 0.4)
+                truncated_memory = truncate_memory_to_tokens(memory_content, max_tokens=memory_limit)
                 
                 # Add memory as system context
                 messages.append({
@@ -418,7 +420,7 @@ async def handle_chat_request(payload: Dict[str, Any], request):
                     ChatMessage.id < user_message.id  # Only messages before current one
                 )
                 .order_by(ChatMessage.created_at.desc())
-                .limit(10)
+                .limit(20)  # Increased from 10 to 20 messages for better context
             )
             db_messages = history_result.scalars().all()
             
@@ -602,7 +604,7 @@ Please answer the user's question based on the document content above."""
         elif has_vision:
             if logger:
                 logger.info(f"🎨 Routing to Gemma model in LM Studio with {len(vision_images)} image(s)")
-                logger.info(f"🎨 Model: {settings.GEMMA_MODEL}")
+                logger.info(f"🎨 Model: {settings.SCALEWAY_VISION_MODEL}")
                 for i, img in enumerate(vision_images):
                     logger.info(f"  📷 Image {i+1}: {img['filename']} ({img['type']})")
             
@@ -638,7 +640,7 @@ Please answer the user's question based on the document content above."""
             # Call LM Studio with Gemma model
             resp = await call_lmstudio_chat(
                 messages, 
-                model=settings.GEMMA_MODEL,  # Use Gemma model for images
+                model=settings.SCALEWAY_VISION_MODEL,  # Use Gemma model for images
                 max_tokens=settings.MAX_TOKENS,  # Reasonable limit for multimodal
                 timeout=settings.LM_TIMEOUT
             )
@@ -773,7 +775,7 @@ Please answer the user's question based on the document content above."""
             if has_vision:
                 result["vision_processed"] = True
                 result["images_count"] = len(vision_images)
-                result["model_used"] = settings.GEMMA_MODEL
+                result["model_used"] = settings.SCALEWAY_VISION_MODEL
                 result["image_filenames"] = [img.get("filename", "unknown") for img in vision_images]
         
         if logger:

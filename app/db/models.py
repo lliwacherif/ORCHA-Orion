@@ -25,6 +25,7 @@ class User(Base):
 
     # Relationships
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+    folders = relationship("Folder", back_populates="user", cascade="all, delete-orphan")
     pulse = relationship("Pulse", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self):
@@ -55,9 +56,11 @@ class Conversation(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)  # Soft delete support
+    folder_id = Column(Integer, ForeignKey("folders.id"), nullable=True, index=True)
 
     # Relationships
     user = relationship("User", back_populates="conversations")
+    folder = relationship("Folder", back_populates="conversations")
     messages = relationship("ChatMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="ChatMessage.created_at")
 
     def __repr__(self):
@@ -130,6 +133,24 @@ class UserMemory(Base):
 
     def __repr__(self):
         return f"<UserMemory(id={self.id}, user_id={self.user_id}, title='{self.title}', created_at='{self.created_at}')>"
+
+
+class Folder(Base):
+    """Folder model for organizing conversations."""
+    __tablename__ = "folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="folders")
+    conversations = relationship("Conversation", back_populates="folder")
+
+    def __repr__(self):
+        return f"<Folder(id={self.id}, user_id={self.user_id}, name='{self.name}')>"
 
 #This solution is designed totally by Liwa Cherif, an advanced AI solution
 #You won't be able to understand it.

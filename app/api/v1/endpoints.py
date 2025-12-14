@@ -17,7 +17,8 @@ from app.services.chatbot_client import get_available_models
 from app.utils.token_tracker_pg import PostgreSQLTokenTracker
 from app.services.pulse_service import get_user_pulse, update_user_pulse
 from app.db.database import get_db
-from app.db.models import User, Conversation, ChatMessage, UserMemory
+from app.api.v1.auth import get_current_user
+from app.db.models import User, Conversation, ChatMessage, UserMemory, Folder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from datetime import datetime
@@ -124,6 +125,7 @@ class ConversationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: int
+    folder_id: Optional[int] = None
 
 class ChatMessageResponse(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -142,12 +144,17 @@ class ConversationDetailResponse(BaseModel):
     tenant_id: Optional[str]
     created_at: datetime
     updated_at: datetime
+    folder_id: Optional[int] = None
     messages: List[ChatMessageResponse]
 
 class CreateConversationRequest(BaseModel):
     user_id: int
     title: Optional[str] = None
     tenant_id: Optional[str] = None
+
+class PatchConversationRequest(BaseModel):
+    folder_id: Optional[int] = None
+    title: Optional[str] = None
 
 class UpdateConversationRequest(BaseModel):
     title: Optional[str] = None
@@ -1064,7 +1071,8 @@ async def get_user_conversations(
                 tenant_id=conv.tenant_id,
                 created_at=conv.created_at,
                 updated_at=conv.updated_at,
-                message_count=message_count
+                message_count=message_count,
+                folder_id=conv.folder_id # Add folder_id here
             ))
         
         return conversation_responses
@@ -1127,20 +1135,76 @@ async def get_conversation_detail(
                 traceback.print_exc()
                 raise
         
-        return ConversationDetailResponse(
-            id=conversation.id,
-            title=conversation.title,
-            tenant_id=conversation.tenant_id,
-            created_at=conversation.created_at,
-            updated_at=conversation.updated_at,
-            messages=message_responses
-        )
+        return {
+            "id": conversation.id,
+            "title": conversation.title,
+            "tenant_id": conversation.tenant_id,
+            "created_at": conversation.created_at,
+            "updated_at": conversation.updated_at,
+            "folder_id": conversation.folder_id,
+            "messages": message_responses # Changed from 'messages' to 'message_responses' to match the variable name
+        }
+
     except HTTPException:
         raise
     except Exception as e:
         print(f"❌ Error in get_conversation_detail: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/conversations/{conversation_id}")
+async def patch_conversation(
+    conversation_id: int,
+    patch_data: PatchConversationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update conversation details (e.g. move to folder, rename)."""
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Update folder_id if provided (allow setting to None)
+    if patch_data.folder_id is not None:
+        # If folder_id is 0 or -1 (frontend convention for "no folder"), set to None
+        if patch_data.folder_id <= 0:
+            conversation.folder_id = None
+        else:
+            # Verify folder ownership
+            folder_result = await db.execute(
+                select(Folder).where(
+                    Folder.id == patch_data.folder_id,
+                    Folder.user_id == current_user.id
+                )
+            )
+            if not folder_result.scalar_one_or_none():
+                raise HTTPException(status_code=404, detail="Folder not found")
+            conversation.folder_id = patch_data.folder_id
+            
+    # Allow explicit setting to null if field is present in dict but None (need extra handling if Pydantic model didn't use exclude_unset)
+    # For now, let's assume the client sends specific values or we check keys
+    
+    if patch_data.title is not None:
+        conversation.title = patch_data.title
+        
+    conversation.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(conversation)
+    
+    # Return simplified response or full detail
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "folder_id": conversation.folder_id,
+        "updated_at": conversation.updated_at
+    }
 
 @router.put("/conversations/{user_id}/{conversation_id}", response_model=ConversationResponse)
 async def update_conversation(

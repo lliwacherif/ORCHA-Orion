@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Deprecated: LM Studio / Chatbot service
     # LMSTUDIO_URL: str = "http://localhost:1234"
     # LMSTUDIO_VISION_MODEL: str = "llava-v1.6-34b"
-    # GEMMA_MODEL: str = "google/gemma-3-12b"
+    SCALEWAY_VISION_MODEL: str = "gemma-3-27b-it"
 
     # OCR service endpoint (your PaddleOCR wrapper)
     OCR_SERVICE_URL: str = "http://localhost:8001"
@@ -35,7 +35,8 @@ class Settings(BaseSettings):
     OCR_TIMEOUT: int = 60
 
     # Model Generation Settings
-    MAX_TOKENS: int = 2800
+    MAX_TOKENS: int = 4096
+    CONTEXT_WINDOW_SIZE: int = 18000
 
     # Google Custom Search API
     GOOGLE_API_KEY: str = "your-google-api-key-here"

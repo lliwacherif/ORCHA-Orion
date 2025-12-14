@@ -28,6 +28,9 @@ app.add_middleware(TraceIdMiddleware)
 app.include_router(v1_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
 
+from app.api.v1.folders import router as folders_router
+app.include_router(folders_router, prefix="/api/v1/folders", tags=["Folders"])
+
 @app.on_event("startup")
 async def startup_event():
     global pulse_scheduler_task, pulse_checker_task
