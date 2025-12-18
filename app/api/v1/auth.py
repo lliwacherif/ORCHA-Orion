@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import Optional
+from typing import Optional, Literal
 from app.db.database import get_db
 from app.db.models import User
 from app.utils.auth import (
@@ -21,6 +21,9 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6)
     full_name: Optional[str] = None
+    job_title: Literal["Doctor", "Lawyer", "Engineer", "Accountant"] = Field(
+        ..., description="User-selected job title"
+    )
 
 class UserLogin(BaseModel):
     username: str
@@ -33,6 +36,7 @@ class UserResponse(BaseModel):
     full_name: Optional[str]
     is_active: bool
     plan_type: str
+    job_title: str
     created_at: str
 
     class Config:
@@ -73,6 +77,7 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_db)):
         full_name=user_data.full_name,
         is_active=True,
         plan_type="free",
+        job_title=user_data.job_title,
     )
     
     db.add(new_user)
@@ -92,6 +97,7 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_db)):
             full_name=new_user.full_name,
             is_active=new_user.is_active,
             plan_type=new_user.plan_type,
+            job_title=new_user.job_title,
             created_at=new_user.created_at.isoformat(),
         )
     }
@@ -139,6 +145,7 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
             full_name=user.full_name,
             is_active=user.is_active,
             plan_type=user.plan_type,
+            job_title=user.job_title,
             created_at=user.created_at.isoformat(),
         )
     }
@@ -156,6 +163,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
         full_name=current_user.full_name,
         is_active=current_user.is_active,
         plan_type=current_user.plan_type,
+        job_title=current_user.job_title,
         created_at=current_user.created_at.isoformat(),
     )
 

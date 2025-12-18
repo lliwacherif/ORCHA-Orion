@@ -1,5 +1,5 @@
 # app/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, BigInteger, Text, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, BigInteger, Text, ForeignKey, JSON, CheckConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -9,6 +9,12 @@ Base = declarative_base()
 class User(Base):
     """User model for authentication and profiles."""
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "job_title IN ('Doctor','Lawyer','Engineer','Accountant')",
+            name="ck_users_job_title_valid",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
@@ -22,6 +28,7 @@ class User(Base):
     
     # Optional: plan type for token limits
     plan_type = Column(String(20), default="free", nullable=False)  # free, pro, enterprise
+    job_title = Column(String(50), nullable=False, server_default="Engineer")
 
     # Relationships
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
