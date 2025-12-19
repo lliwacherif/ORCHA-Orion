@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-this-secret-key-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
+    
+    # Admin Dashboard JWT Settings (separate from user auth)
+    ADMIN_SECRET_KEY: str = "admin-secret-key-change-in-production"
+    ADMIN_TOKEN_EXPIRE_HOURS: int = 24
 
     # Scaleway / OpenAI-compatible API
     SCALEWAY_API_URL: str = "https://api.scaleway.ai/d067acb3-2897-4c85-a126-957eb6768d0b/v1"

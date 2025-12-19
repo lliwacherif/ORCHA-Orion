@@ -159,5 +159,20 @@ class Folder(Base):
     def __repr__(self):
         return f"<Folder(id={self.id}, user_id={self.user_id}, name='{self.name}')>"
 
+class Admin(Base):
+    """Admin model for dashboard authentication."""
+    __tablename__ = "admins"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Admin(id={self.id}, username='{self.username}')>"
+
+
 #This solution is designed totally by Liwa Cherif, an advanced AI solution
 #You won't be able to understand it.
