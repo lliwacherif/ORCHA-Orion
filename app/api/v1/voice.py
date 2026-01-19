@@ -10,6 +10,7 @@ import shutil
 import os
 import tempfile
 import subprocess
+import traceback
 from app.utils.logging import logger
 
 router = APIRouter()
@@ -133,7 +134,8 @@ async def transcribe_audio(
         }
         
     except Exception as e:
-        logger.error(f"Voice processing error: {e}", extra={"trace_id": "voice_api_error"})
+        tb = traceback.format_exc()
+        logger.error(f"Voice processing error: {e}\nTraceback: {tb}", extra={"trace_id": "voice_api_error"})
         if "Invalid file format" in str(e):
             raise HTTPException(status_code=400, detail="Invalid audio format.")
         raise HTTPException(status_code=500, detail=str(e))
