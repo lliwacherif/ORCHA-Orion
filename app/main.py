@@ -34,6 +34,9 @@ app.include_router(folders_router, prefix="/api/v1/folders", tags=["Folders"])
 from app.api.v1.admin import router as admin_router
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["Admin Dashboard"])
 
+from app.api.v1.voice import router as voice_router
+app.include_router(voice_router, prefix="/api/v1/voice", tags=["Voice"])
+
 @app.on_event("startup")
 async def startup_event():
     global pulse_scheduler_task, pulse_checker_task

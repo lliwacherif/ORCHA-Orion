@@ -18,9 +18,13 @@ class Settings(BaseSettings):
     ADMIN_TOKEN_EXPIRE_HOURS: int = 24
 
     # Scaleway / OpenAI-compatible API
-    SCALEWAY_API_URL: str = "https://api.scaleway.ai/d067acb3-2897-4c85-a126-957eb6768d0b/v1"
+    SCALEWAY_API_URL: str = "https://api.scaleway.ai/v1"
     SCALEWAY_API_KEY: str = "6b673550-8c7c-4fed-bac4-3e5a85b7860d"
     SCALEWAY_MODEL: str = "gpt-oss-120b"
+    
+    # Whisper Settings
+    WHISPER_MODEL_SIZE: str = "whisper-large-v3"
+    WHISPER_DEVICE: str = "cpu"  # or "cuda" if GPU available
 
     # Deprecated: LM Studio / Chatbot service
     # LMSTUDIO_URL: str = "http://localhost:1234"
