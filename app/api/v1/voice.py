@@ -40,7 +40,12 @@ async def transcribe_audio(
             shutil.copyfileobj(file.file, temp_file)
             temp_file_path = temp_file.name
         
-        logger.info(f"Saved temp audio file to {temp_file_path}")
+        if request and hasattr(request.state, "trace_id"):
+            tid = request.state.trace_id
+        else:
+            tid = "voice_api"
+            
+        logger.info(f"Saved temp audio file to {temp_file_path}", extra={"trace_id": tid})
         
         # 2. Convert to MP3 using FFmpeg (Scaleway supports: flac, mp3, wav, ogg)
         # We only convert if it's NOT one of the supported formats, or just always convert to be safe/consistent?
@@ -48,7 +53,7 @@ async def transcribe_audio(
         converted_file_path = temp_file_path + ".mp3"
         
         try:
-            logger.info("Converting audio to MP3 using ffmpeg...")
+            logger.info("Converting audio to MP3 using ffmpeg...", extra={"trace_id": tid})
             
             # Determine ffmpeg path
             ffmpeg_cmd = _get_ffmpeg_path()
@@ -73,16 +78,16 @@ async def transcribe_audio(
                 check=True
             )
             
-            logger.info(f"Conversion successful: {converted_file_path}")
+            logger.info(f"Conversion successful: {converted_file_path}", extra={"trace_id": tid})
             final_file_path = converted_file_path
             
         except (FileNotFoundError, subprocess.CalledProcessError) as e:
             error_msg = e.stderr.decode() if isinstance(e, subprocess.CalledProcessError) and e.stderr else str(e)
-            logger.error(f"FFMPEG conversion failed or not found: {error_msg}")
+            logger.error(f"FFMPEG conversion failed or not found: {error_msg}", extra={"trace_id": tid})
             
             # If conversion failed, trying to use the original file if it looks compatible
             if suffix.lower() in [".mp3", ".wav", ".flac", ".ogg"]:
-                logger.info(f"FFmpeg failed, but file format {suffix} might be supported directly. Trying original file.")
+                logger.info(f"FFmpeg failed, but file format {suffix} might be supported directly. Trying original file.", extra={"trace_id": tid})
                 final_file_path = temp_file_path
             else:
                  # If it was webm or something else, we really needed that conversion.
@@ -97,7 +102,7 @@ async def transcribe_audio(
              raise HTTPException(status_code=500, detail="Failed to prepare audio file for transcription.")
 
         transcribed_text = voice_service.transcribe(final_file_path)
-        logger.info(f"Transcribed Text: {transcribed_text}")
+        logger.info(f"Transcribed Text: {transcribed_text}", extra={"trace_id": tid})
         
         if not transcribed_text:
             return {
@@ -128,7 +133,7 @@ async def transcribe_audio(
         }
         
     except Exception as e:
-        logger.error(f"Voice processing error: {e}")
+        logger.error(f"Voice processing error: {e}", extra={"trace_id": "voice_api_error"})
         if "Invalid file format" in str(e):
             raise HTTPException(status_code=400, detail="Invalid audio format.")
         raise HTTPException(status_code=500, detail=str(e))
@@ -142,7 +147,7 @@ async def transcribe_audio(
                 try:
                     os.remove(path)
                 except Exception as e:
-                    logger.warning(f"Failed to remove temp file {path}: {e}")
+                    logger.warning(f"Failed to remove temp file {path}: {e}", extra={"trace_id": tid})
 
 def _get_ffmpeg_path() -> str:
     """Determine the correct FFmpeg path for the current OS."""
@@ -150,13 +155,13 @@ def _get_ffmpeg_path() -> str:
     if os.name == 'nt':
         local_ffmpeg = os.path.join(os.getcwd(), "app", "bin", "ffmpeg.exe")
         if os.path.exists(local_ffmpeg):
-            logger.info(f"Using local ffmpeg: {local_ffmpeg}")
+            logger.info(f"Using local ffmpeg: {local_ffmpeg}", extra={"trace_id": "ffmpeg_check"})
             return local_ffmpeg
     
     # Check system path (works for both Linux and valid Windows PATH)
     system_ffmpeg = shutil.which("ffmpeg")
     if system_ffmpeg:
-        logger.info(f"Using system ffmpeg at: {system_ffmpeg}")
+        logger.info(f"Using system ffmpeg at: {system_ffmpeg}", extra={"trace_id": "ffmpeg_check"})
         return system_ffmpeg
         
     # Linux fallbacks
@@ -169,7 +174,7 @@ def _get_ffmpeg_path() -> str:
         ]
         for path in common_paths:
             if os.path.exists(path):
-                logger.info(f"Found ffmpeg at: {path}")
+                logger.info(f"Found ffmpeg at: {path}", extra={"trace_id": "ffmpeg_check"})
                 return path
     
     logger.warning("ffmpeg not found, using default 'ffmpeg' command")

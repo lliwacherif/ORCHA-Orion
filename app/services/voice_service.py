@@ -17,14 +17,14 @@ class VoiceService:
     def _initialize_client(self):
         """Initialize the OpenAI client for Scaleway."""
         try:
-            logger.info("Initializing Scaleway Whisper client...")
+            logger.info("Initializing Scaleway Whisper client...", extra={"trace_id": "startup"})
             self.client = OpenAI(
                 base_url=settings.SCALEWAY_API_URL,
                 api_key=settings.SCALEWAY_API_KEY
             )
-            logger.info("✅ Scaleway Whisper client initialized")
+            logger.info("✅ Scaleway Whisper client initialized", extra={"trace_id": "startup"})
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Scaleway client: {e}")
+            logger.error(f"❌ Failed to initialize Scaleway client: {e}", extra={"trace_id": "startup"})
             self.client = None
 
     def transcribe(self, file_path: str, language: str = "fr") -> str:
@@ -44,7 +44,7 @@ class VoiceService:
                 raise RuntimeError("Scaleway client is not initialized")
         
         try:
-            logger.info(f"Transcribing file: {file_path}")
+            logger.info(f"Transcribing file: {file_path}", extra={"trace_id": "voice_service"})
             
             # Verify file exists
             if not os.path.exists(file_path):
@@ -59,12 +59,12 @@ class VoiceService:
                 )
             
             transcribed_text = transcript.text
-            logger.info(f"Transcription successful: {transcribed_text[:50]}...")
+            logger.info(f"Transcription successful: {transcribed_text[:50]}...", extra={"trace_id": "voice_service"})
             
             return transcribed_text
             
         except Exception as e:
-            logger.error(f"Scaleway Transcription error: {e}")
+            logger.error(f"Scaleway Transcription error: {e}", extra={"trace_id": "voice_service"})
             raise e
 
 # Global singleton instance
