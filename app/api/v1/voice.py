@@ -12,6 +12,7 @@ import tempfile
 import subprocess
 import traceback
 from app.utils.logging import logger
+from app.config import settings
 
 router = APIRouter()
 
