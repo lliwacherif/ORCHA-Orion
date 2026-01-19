@@ -5,7 +5,15 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger("orcha")
+
+class TraceIdFilter(logging.Filter):
+    def filter(self, record):
+        if not hasattr(record, 'trace_id'):
+            record.trace_id = 'SYSTEM'
+        return True
+
 handler = logging.StreamHandler()
+handler.addFilter(TraceIdFilter())
 formatter = logging.Formatter("%(asctime)s %(levelname)s [%(trace_id)s] %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
