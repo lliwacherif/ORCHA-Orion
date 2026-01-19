@@ -177,5 +177,5 @@ def _get_ffmpeg_path() -> str:
                 logger.info(f"Found ffmpeg at: {path}", extra={"trace_id": "ffmpeg_check"})
                 return path
     
-    logger.warning("ffmpeg not found, using default 'ffmpeg' command")
+    logger.warning("ffmpeg not found, using default 'ffmpeg' command", extra={"trace_id": "ffmpeg_check"})
     return "ffmpeg"
